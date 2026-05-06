@@ -1,23 +1,23 @@
-// sw.js - Service Worker para Exotic Nails by Yuly
+// sw.js - Service Worker para Knela nails art
 
-const CACHE_NAME = 'exoticnailsbyyuly-v1';
+const CACHE_NAME = 'knelanailsart-v1';
 const urlsToCache = [
-  '/exoticnailsbyyuly/',
-  '/exoticnailsbyyuly/index.html',
-  '/exoticnailsbyyuly/admin.html',
-  '/exoticnailsbyyuly/admin-login.html',
-  '/exoticnailsbyyuly/calendar.html',
-  '/exoticnailsbyyuly/setup-wizard.html',
-  '/exoticnailsbyyuly/editar-negocio.html',
-  '/exoticnailsbyyuly/manifest.json',
-  '/exoticnailsbyyuly/icons/icon-72x72.png',
-  '/exoticnailsbyyuly/icons/icon-96x96.png',
-  '/exoticnailsbyyuly/icons/icon-128x128.png',
-  '/exoticnailsbyyuly/icons/icon-144x144.png',
-  '/exoticnailsbyyuly/icons/icon-152x152.png',
-  '/exoticnailsbyyuly/icons/icon-192x192.png',
-  '/exoticnailsbyyuly/icons/icon-384x384.png',
-  '/exoticnailsbyyuly/icons/icon-512x512.png'
+  '/knelanailsart/',
+  '/knelanailsart/index.html',
+  '/knelanailsart/admin.html',
+  '/knelanailsart/admin-login.html',
+  '/knelanailsart/calendar.html',
+  '/knelanailsart/setup-wizard.html',
+  '/knelanailsart/editar-negocio.html',
+  '/knelanailsart/manifest.json',
+  '/knelanailsart/icons/icon-72x72.png',
+  '/knelanailsart/icons/icon-96x96.png',
+  '/knelanailsart/icons/icon-128x128.png',
+  '/knelanailsart/icons/icon-144x144.png',
+  '/knelanailsart/icons/icon-152x152.png',
+  '/knelanailsart/icons/icon-192x192.png',
+  '/knelanailsart/icons/icon-384x384.png',
+  '/knelanailsart/icons/icon-512x512.png'
 ];
 
 // ============================================
@@ -109,7 +109,7 @@ self.addEventListener('fetch', event => {
           }
           // Si no hay cache y es imagen, devolver icon por defecto
           if (event.request.url.match(/\.(jpg|jpeg|png|gif|svg|webp)$/)) {
-            return caches.match('/exoticnailsbyyuly/icons/icon-192x192.png');
+            return caches.match('/knelanailsart/icons/icon-192x192.png');
           }
           return new Response('Error de red', { status: 408 });
         });
@@ -139,6 +139,6 @@ self.addEventListener('message', event => {
   }
 });
 
-console.log('✅ Service Worker configurado para Exotic Nails by Yuly');
+console.log('✅ Service Worker configurado para Knela nails art');
 console.log('📦 Cache:', CACHE_NAME);
 console.log('📄 Archivos a cachear:', urlsToCache.length);

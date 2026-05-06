@@ -1,12 +1,12 @@
 // utils/config-negocio.js - VERSIÓN MULTI-TENANT CORREGIDA
-// CLIENTE: Exotic Nails by Yuly
+// CLIENTE: Knela nails art
 
 console.log('🏢 config-negocio.js cargado');
 
 // ============================================
 // 🔥 CONFIGURACIÓN POR CLIENTE - ¡LO ÚNICO QUE CAMBIA!
 // ============================================
-const NEGOCIO_ID_POR_DEFECTO = '55e7df41-6cf7-45d7-9fc3-a17966e3645a'; // ID de Exotic Nails by Yuly
+const NEGOCIO_ID_POR_DEFECTO = '8fd7007b-12a5-4ed4-88cc-b9c84b75a6e3'; // ID de Knela nails art
 
 // Hacer accesible globalmente
 window.NEGOCIO_ID_POR_DEFECTO = NEGOCIO_ID_POR_DEFECTO;
@@ -116,7 +116,7 @@ window.cargarConfiguracionNegocio = async function(forceRefresh = false) {
  */
 window.getNombreNegocio = async function() {
     const config = await window.cargarConfiguracionNegocio();
-    return config?.nombre || 'Exotic Nails by Yuly';
+    return config?.nombre || 'Knela nails art';
 };
 
 /**
@@ -124,7 +124,7 @@ window.getNombreNegocio = async function() {
  */
 window.getTelefonoDuenno = async function() {
     const config = await window.cargarConfiguracionNegocio();
-    return config?.telefono || '52541431';
+    return config?.telefono || '58146272';
 };
 
 /**
@@ -132,7 +132,7 @@ window.getTelefonoDuenno = async function() {
  */
 window.getEmailNegocio = async function() {
     const config = await window.cargarConfiguracionNegocio();
-    return config?.email || 'yulynails52@gmail.com';
+    return config?.email || 'rodriguezwarnerd@gmail.com';
 };
 
 /**
@@ -164,7 +164,7 @@ window.getHorarioAtencion = async function() {
  */
 window.getMensajeBienvenida = async function() {
     const config = await window.cargarConfiguracionNegocio();
-    return config?.mensaje_bienvenida || '¡Bienvenida a Exotic Nails by Yuly!';
+    return config?.mensaje_bienvenida || '¡Bienvenida a Knela nails art!';
 };
 
 /**
@@ -180,7 +180,7 @@ window.getMensajeConfirmacion = async function() {
  */
 window.getNtfyTopic = async function() {
     const config = await window.cargarConfiguracionNegocio();
-    return config?.ntfy_topic || 'exoticnailsbyyuly';
+    return config?.ntfy_topic || 'knelanailsart';
 };
 
 /**
@@ -205,5 +205,5 @@ setTimeout(async () => {
     await window.cargarConfiguracionNegocio();
 }, 500);
 
-console.log('✅ config-negocio.js listo para Exotic Nails by Yuly');
+console.log('✅ config-negocio.js listo para Knela nails art');
 console.log('🏷️  ID configurado:', NEGOCIO_ID_POR_DEFECTO);

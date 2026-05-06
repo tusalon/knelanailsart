@@ -1,20 +1,20 @@
 {
-  "name": "Exotic Nails by Yuly",
-  "short_name": "Exotic",
+  "name": "Knela nails art",
+  "short_name": "Knela",
   "description": "Uñas y belleza - Tu espacio de cuidado personal",
-  "start_url": "/exoticnailsbyyuly/",
-  "scope": "/exoticnailsbyyuly/",
+  "start_url": "/knelanailsart/",
+  "scope": "/knelanailsart/",
   "display": "standalone",
   "background_color": "#ec4899",
   "theme_color": "#ec4899",
   "icons": [
     {
-      "src": "/exoticnailsbyyuly/icons/icon-192x192.png",
+      "src": "/knelanailsart/icons/icon-192x192.png",
       "sizes": "192x192",
       "type": "image/png"
     },
     {
-      "src": "/exoticnailsbyyuly/icons/icon-512x512.png",
+      "src": "/knelanailsart/icons/icon-512x512.png",
       "sizes": "512x512",
       "type": "image/png"
     }
