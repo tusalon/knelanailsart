@@ -25,15 +25,15 @@
     <script src="utils/profesionales.js"></script>
     <script src="utils/config.js"></script>
     <script src="utils/whatsapp-helper.js"></script>
-    <script src="utils/dias-cerrados.js"></script>
 
     <!-- Componentes admin -->
-    <script src="components/admin/ConfigPanel.js" type="text/babel"></script>
+    <script src="components/admin/ConfigPanel.js?v=20260520-indefinido-cobro" type="text/babel"></script>
     <script src="components/admin/ServiciosPanel.js" type="text/babel"></script>
+    <script src="components/admin/ServiciosPanelPro.js" type="text/babel"></script>
+    <script src="components/admin/ServiciosPanelCategorias.js?v=20260515-categorias-normalizadas" type="text/babel"></script>
     <script src="components/admin/ProfesionalesPanel.js" type="text/babel"></script>
-    <script src="components/admin/HorariosPorDiaPanel.js" type="text/babel"></script>
-    <script src="components/admin/DiasCerradosPanel.js" type="text/babel"></script>
-    <script src="admin-app.js" type="text/babel"></script>
+    <script src="components/admin/HorariosPorDiaPanel.js?v=20260514-horarios-text" type="text/babel"></script>
+    <script src="admin-app.js?v=20260520-indefinido-cobro" type="text/babel"></script>
 
     <script>
         (function() {
@@ -46,11 +46,19 @@
             }
             
             // Verificar sesión (8 horas)
-            const loginTime = localStorage.getItem('adminLoginTime');
-            const isValidSession = loginTime && (Date.now() - parseInt(loginTime)) < 8 * 60 * 60 * 1000;
+            const ahora = Date.now();
+            const maxSesion = 8 * 60 * 60 * 1000;
+            const adminLoginTime = localStorage.getItem('adminLoginTime');
+            const profesionalLoginTime = localStorage.getItem('profesionalLoginTime');
+            const profesionalAuth = localStorage.getItem('profesionalAuth');
+            const isValidAdminSession = adminLoginTime && (ahora - parseInt(adminLoginTime)) < maxSesion;
+            const isValidProfesionalSession = profesionalAuth && profesionalLoginTime && (ahora - parseInt(profesionalLoginTime)) < maxSesion;
             
-            if (!isValidSession) {
-                localStorage.clear();
+            if (!isValidAdminSession && !isValidProfesionalSession) {
+                localStorage.removeItem('adminAuth');
+                localStorage.removeItem('adminLoginTime');
+                localStorage.removeItem('profesionalAuth');
+                localStorage.removeItem('profesionalLoginTime');
                 window.location.href = 'admin-login.html';
             }
         })();

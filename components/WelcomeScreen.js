@@ -130,18 +130,18 @@ function WelcomeScreen({ onStart, onGoBack, cliente, userRol }) {
 
             {/* Contenido scrolleable */}
             <div className="relative z-10 min-h-screen flex items-start justify-center py-16 px-4">
-                <div className="w-full max-w-2xl bg-white/20 backdrop-blur-md p-6 sm:p-10 rounded-3xl shadow-2xl border border-pink-300/50 my-auto">
+                <div className="w-full max-w-2xl bg-black/15 backdrop-blur-[1px] p-6 sm:p-10 rounded-3xl shadow-2xl border border-pink-300/25 my-auto">
                     <div className="text-center space-y-6">
                         {/* Logo o sticker */}
                         {config?.logo_url ? (
                             <img 
                                 src={config.logo_url} 
                                 alt={config.nombre} 
-                                className="w-20 h-20 sm:w-24 sm:h-24 object-contain mx-auto rounded-2xl shadow-2xl ring-4 ring-pink-300/50"
+                                className="w-20 h-20 sm:w-24 sm:h-24 object-contain mx-auto rounded-2xl shadow-2xl ring-4 ring-pink-300/35"
                             />
                         ) : (
                             <div 
-                                className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl mx-auto flex items-center justify-center shadow-2xl ring-4 ring-pink-300/50"
+                                className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl mx-auto flex items-center justify-center shadow-2xl ring-4 ring-pink-300/35"
                                 style={{ backgroundColor: colorPrimario }}
                             >
                                 <span className="text-4xl sm:text-5xl">{sticker}</span>
@@ -174,7 +174,7 @@ function WelcomeScreen({ onStart, onGoBack, cliente, userRol }) {
                                 {tieneWhatsApp && (
                                     <button
                                         onClick={abrirWhatsApp}
-                                        className="w-12 h-12 sm:w-14 sm:h-14 bg-[#25D366] rounded-full flex items-center justify-center hover:scale-110 transition-all transform hover:shadow-xl border-2 border-white/50 group relative"
+                                        className="w-12 h-12 sm:w-14 sm:h-14 bg-[#25D366] rounded-full flex items-center justify-center hover:scale-[1.03] transition-all duration-300 transform hover:shadow-lg border border-white/35 group relative"
                                         title="Contactar por WhatsApp"
                                     >
                                         <i className="icon-message-circle text-white text-xl sm:text-2xl"></i>
@@ -187,7 +187,7 @@ function WelcomeScreen({ onStart, onGoBack, cliente, userRol }) {
                                 {tieneInstagram && (
                                     <button
                                         onClick={abrirInstagram}
-                                        className="w-12 h-12 sm:w-14 sm:h-14 bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400 rounded-full flex items-center justify-center hover:scale-110 transition-all transform hover:shadow-xl border-2 border-white/50 group relative"
+                                        className="w-12 h-12 sm:w-14 sm:h-14 bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400 rounded-full flex items-center justify-center hover:scale-[1.03] transition-all duration-300 transform hover:shadow-lg border border-white/35 group relative"
                                         title="Instagram"
                                     >
                                         <i className="icon-instagram text-white text-xl sm:text-2xl"></i>
@@ -200,7 +200,7 @@ function WelcomeScreen({ onStart, onGoBack, cliente, userRol }) {
                                 {tieneFacebook && (
                                     <button
                                         onClick={abrirFacebook}
-                                        className="w-12 h-12 sm:w-14 sm:h-14 bg-[#1877F2] rounded-full flex items-center justify-center hover:scale-110 transition-all transform hover:shadow-xl border-2 border-white/50 group relative"
+                                        className="w-12 h-12 sm:w-14 sm:h-14 bg-[#1877F2] rounded-full flex items-center justify-center hover:scale-[1.03] transition-all duration-300 transform hover:shadow-lg border border-white/35 group relative"
                                         title="Facebook"
                                     >
                                         <i className="icon-facebook text-white text-xl sm:text-2xl"></i>
@@ -215,7 +215,7 @@ function WelcomeScreen({ onStart, onGoBack, cliente, userRol }) {
                         <div className="pt-4 sm:pt-6">
                             <button 
                                 onClick={onStart}
-                                className="text-white text-base sm:text-lg font-bold py-3 sm:py-4 px-8 sm:px-10 rounded-full shadow-2xl transition-all transform hover:scale-110 active:scale-95 flex items-center justify-center gap-2 mx-auto border-2 border-pink-300 w-full sm:w-auto"
+                                className="text-white text-base sm:text-lg font-bold py-3 sm:py-4 px-8 sm:px-10 rounded-full shadow-xl transition-all duration-300 transform hover:scale-[1.02] hover:shadow-2xl active:scale-[0.99] flex items-center justify-center gap-2 mx-auto border border-pink-200/70 w-full sm:w-auto"
                                 style={{ backgroundColor: colorPrimario }}
                             >
                                 <span className="text-lg sm:text-xl">💖</span>

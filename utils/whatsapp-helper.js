@@ -7,7 +7,7 @@ function generarLinkCalendarioCliente(booking) {
     if (!booking?.id) return '';
 
     const pathParts = window.location.pathname.split('/').filter(Boolean);
-    const basePath = pathParts.length > 1 ? `/${pathParts[0]}/` : '/';
+    const basePath = pathParts.length >= 1 ? `/${pathParts[0]}/` : '/';
     const calendarUrl = new URL('calendar.html', `${window.location.origin}${basePath}`);
 
     calendarUrl.searchParams.set('id', booking.id);
@@ -27,15 +27,20 @@ async function getConfigNegocio() {
     try {
         const config = await window.cargarConfiguracionNegocio();
         return {
+            ...(config || {}),
             nombre: config?.nombre || 'Mi Negocio',
             telefono: config?.telefono || '00000000',
-            ntfyTopic: config?.ntfy_topic || 'notificaciones'
+            direccion: config?.direccion || config?.ubicacion || config?.direccion_negocio || config?.address || '',
+            ubicacion: config?.ubicacion || config?.direccion || config?.direccion_negocio || config?.address || '',
+            ntfyTopic: config?.ntfy_topic || config?.ntfyTopic || 'notificaciones'
         };
     } catch (error) {
         console.error('Error obteniendo configuración:', error);
         return {
             nombre: 'Mi Negocio',
             telefono: '00000000',
+            direccion: '',
+            ubicacion: '',
             ntfyTopic: 'notificaciones'
         };
     }
@@ -51,8 +56,14 @@ async function calcularMontoAnticipo(configNegocio, servicioNombre) {
     let precioServicio = 0;
     if (window.salonServicios) {
         const servicios = await window.salonServicios.getAll(true);
-        const servicio = servicios.find(s => s.nombre === servicioNombre);
-        if (servicio) precioServicio = servicio.precio || 0;
+        const nombres = String(servicioNombre || '').split(' + ').map(nombre => nombre.trim()).filter(Boolean);
+        const serviciosEncontrados = servicios.filter(s => nombres.includes(s.nombre));
+        if (serviciosEncontrados.length > 0) {
+            precioServicio = serviciosEncontrados.reduce((total, servicio) => total + (parseFloat(servicio.precio) || 0), 0);
+        } else {
+            const servicio = servicios.find(s => s.nombre === servicioNombre);
+            if (servicio) precioServicio = servicio.precio || 0;
+        }
     }
 
     const porcentaje = (configNegocio.valor_anticipo || 0) / 100;
@@ -67,6 +78,42 @@ function getFechaHora(booking) {
 
 function getProfesional(booking) {
     return booking.profesional_nombre || booking.trabajador_nombre || booking.barbero_nombre || 'No asignada';
+}
+
+function generarLineaDireccion(configNegocio) {
+    const direccion = String(
+        configNegocio?.direccion ||
+        configNegocio?.ubicacion ||
+        configNegocio?.direccion_negocio ||
+        configNegocio?.address ||
+        ''
+    ).trim();
+    return direccion ? `\n📍 *Dirección:* ${direccion}\n` : '';
+}
+
+function aplicarPlantillaPago(configNegocio, booking, datos) {
+    const plantilla = String(configNegocio?.mensaje_pago || '').trim();
+    if (!plantilla) return '';
+
+    const reemplazos = {
+        monto_anticipo: datos.montoAnticipo,
+        cbu: configNegocio?.cbu || configNegocio?.tarjeta || 'No configurado',
+        alias: configNegocio?.alias || 'No configurado',
+        titular: configNegocio?.titular || configNegocio?.nombre || 'No configurado',
+        tiempo_vencimiento: configNegocio?.tiempo_vencimiento || 2,
+        nombre_negocio: configNegocio?.nombre || 'Mi Salón',
+        cliente: booking?.cliente_nombre || '',
+        servicio: booking?.servicio || '',
+        fecha: datos.fechaConDia || '',
+        hora: datos.horaFormateada || '',
+        profesional: datos.profesional || '',
+        direccion: String(configNegocio?.direccion || configNegocio?.ubicacion || configNegocio?.direccion_negocio || configNegocio?.address || '').trim()
+    };
+
+    return plantilla.replace(/\$\{?monto_anticipo\}?|\{([^}]+)\}/g, (match, key) => {
+        if (match.includes('monto_anticipo')) return reemplazos.monto_anticipo;
+        return reemplazos[key] ?? match;
+    });
 }
 
 window.generarLinkCalendarioCliente = generarLinkCalendarioCliente;
@@ -166,6 +213,13 @@ window.enviarMensajePago = async function(booking, configNegocio) {
         const { fechaConDia, horaFormateada } = getFechaHora(booking);
         const profesional = getProfesional(booking);
         const lineaCalendario = generarLineaCalendarioCliente(booking);
+        const lineaDireccion = generarLineaDireccion(configNegocio);
+        const mensajePagoConfig = aplicarPlantillaPago(configNegocio, booking, {
+            montoAnticipo,
+            fechaConDia,
+            horaFormateada,
+            profesional
+        });
 
         const mensajeFinal =
 `💅 *${configNegocio.nombre || 'Mi Salón'} - Confirmación de Turno*
@@ -176,7 +230,9 @@ window.enviarMensajePago = async function(booking, configNegocio) {
 ⏰ *Hora:* ${horaFormateada}
 💅 *Servicio:* ${booking.servicio}
 👩‍🎨 *Profesional:* ${profesional}
+${lineaDireccion}
 
+${mensajePagoConfig || `
 💰 *Para confirmar tu turno*, envía el *anticipo de ${montoAnticipo} CUP* por:
 
 🏦 *Transferencia bancaria:*
@@ -187,7 +243,7 @@ window.enviarMensajePago = async function(booking, configNegocio) {
    +53 ${configNegocio.telefono || '00000000'}
 
 ⏳ *Importante:*
-El turno se cancelará automáticamente si no se confirma el pago dentro de las ${configNegocio.tiempo_vencimiento || 2} horas.
+El turno se cancelará automáticamente si no se confirma el pago dentro de las ${configNegocio.tiempo_vencimiento || 2} horas.`}
 ${lineaCalendario}
 Cuando confirmemos tu pago, tu turno quedará reservado.
 
@@ -217,6 +273,7 @@ window.enviarConfirmacionReserva = async function(booking, configNegocio) {
 
         const { fechaConDia, horaFormateada } = getFechaHora(booking);
         const lineaCalendario = generarLineaCalendarioCliente(booking);
+        const lineaDireccion = generarLineaDireccion(configNegocio);
 
         const mensajeConfirmacion =
 `✅ *${configNegocio?.nombre || 'Mi Salón'} - Turno Confirmado*
@@ -227,6 +284,7 @@ Hola *${booking.cliente_nombre}*, tu turno ha sido agendado.
 ⏰ *Hora:* ${horaFormateada}
 💅 *Servicio:* ${booking.servicio}
 👩‍🎨 *Profesional:* ${getProfesional(booking)}
+${lineaDireccion}
 ${lineaCalendario}
 ¡Te esperamos! ❤️`;
 
@@ -254,6 +312,7 @@ window.enviarConfirmacionPago = async function(booking, configNegocio) {
         const { fechaConDia, horaFormateada } = getFechaHora(booking);
         const nombreNegocio = configNegocio?.nombre || 'Mi Salón';
         const lineaCalendario = generarLineaCalendarioCliente(booking);
+        const lineaDireccion = generarLineaDireccion(configNegocio);
 
         const mensajeConfirmacion =
 `💅 *${nombreNegocio} - Turno Confirmado* 🎉
@@ -264,6 +323,7 @@ Hola *${booking.cliente_nombre}*, ¡tu turno ha sido CONFIRMADO!
 ⏰ *Hora:* ${horaFormateada}
 💅 *Servicio:* ${booking.servicio}
 👩‍🎨 *Profesional:* ${getProfesional(booking)}
+${lineaDireccion}
 
 ✅ *Pago recibido correctamente*
 ${lineaCalendario}
@@ -291,6 +351,8 @@ window.notificarNuevaReserva = async function(booking) {
         const config = await getConfigNegocio();
         const { fechaConDia, horaFormateada } = getFechaHora(booking);
         const profesional = getProfesional(booking);
+        const lineaCalendario = generarLineaCalendarioCliente(booking);
+        const lineaDireccion = generarLineaDireccion(config);
 
         const mensajeWhatsApp =
 `🎉 *NUEVA RESERVA - ${config.nombre}*
@@ -301,6 +363,8 @@ window.notificarNuevaReserva = async function(booking) {
 📅 *Fecha:* ${fechaConDia}
 ⏰ *Hora:* ${horaFormateada}
 👩‍🎨 *Profesional:* ${profesional}
+${lineaDireccion}
+${lineaCalendario}
 
 ✅ Reserva confirmada automáticamente.`;
 
@@ -341,6 +405,14 @@ window.notificarReservaPendiente = async function(booking) {
         const montoAnticipo = await calcularMontoAnticipo(configNegocio, booking.servicio);
         const { fechaConDia, horaFormateada } = getFechaHora(booking);
         const profesional = getProfesional(booking);
+        const lineaCalendario = generarLineaCalendarioCliente(booking);
+        const lineaDireccion = generarLineaDireccion(configNegocio);
+        const mensajePagoConfig = aplicarPlantillaPago(configNegocio, booking, {
+            montoAnticipo,
+            fechaConDia,
+            horaFormateada,
+            profesional
+        });
 
         const mensajeFinal =
 `💅 *${configNegocio.nombre || 'Mi Salón'} - Confirmación de Turno*
@@ -351,7 +423,9 @@ window.notificarReservaPendiente = async function(booking) {
 ⏰ *Hora:* ${horaFormateada}
 💅 *Servicio:* ${booking.servicio}
 👩‍🎨 *Profesional:* ${profesional}
+${lineaDireccion}
 
+${mensajePagoConfig || `
 💰 *Para confirmar tu turno*, envía el *anticipo de ${montoAnticipo} CUP* por:
 
 🏦 *Transferencia bancaria:*
@@ -362,11 +436,12 @@ window.notificarReservaPendiente = async function(booking) {
    +53 ${configNegocio.telefono || '00000000'}
 
 ⏳ *Importante:*
-El turno se cancelará automáticamente si no se confirma el pago dentro de las ${configNegocio.tiempo_vencimiento || 2} horas.
+El turno se cancelará automáticamente si no se confirma el pago dentro de las ${configNegocio.tiempo_vencimiento || 2} horas.`}
+${lineaCalendario}
 
 ¡Gracias por elegirnos! 💖`;
 
-        window.enviarWhatsApp(configNegocio.telefono, mensajeFinal);
+        window.enviarWhatsApp(booking.cliente_whatsapp, mensajeFinal);
 
         const mensajePush =
 `🆕 RESERVA PENDIENTE - ${configNegocio.nombre}
@@ -381,7 +456,7 @@ El turno se cancelará automáticamente si no se confirma el pago dentro de las 
             'high'
         );
 
-        console.log('✅ Dueña notificada con datos de pago + Push');
+        console.log('✅ Cliente notificada con datos de pago + Push a la dueña');
         return true;
     } catch (error) {
         console.error('Error en notificarReservaPendiente:', error);
