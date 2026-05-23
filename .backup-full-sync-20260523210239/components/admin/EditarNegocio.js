@@ -15,10 +15,8 @@ function EditarNegocio() {
         logo_url: '',
         logo_preview: '',
         logo_file: null,
-        imagen_fondo_tipo: 'unas',
         mensaje_bienvenida: '',
         mensaje_confirmacion: '',
-        mensaje_inasistencia: 'Hola {cliente}, registramos que no asististe a tu turno en {nombre_negocio}.\n\nServicio: {servicio}\nFecha: {fecha}\nHora: {hora}\nProfesional: {profesional}\n\nSi necesitas reprogramar, por favor escribenos por este WhatsApp.',
         instagram: '',
         facebook: '',
         horario_atencion: '',
@@ -63,10 +61,8 @@ function EditarNegocio() {
                     logo_url: configData.logo_url || '',
                     logo_preview: configData.logo_url || '',
                     logo_file: null,
-                    imagen_fondo_tipo: configData.imagen_fondo_tipo || 'unas',
                     mensaje_bienvenida: configData.mensaje_bienvenida || '¡Bienvenido!',
                     mensaje_confirmacion: configData.mensaje_confirmacion || 'Tu turno ha sido reservado',
-                    mensaje_inasistencia: configData.mensaje_inasistencia || 'Hola {cliente}, registramos que no asististe a tu turno en {nombre_negocio}.\n\nServicio: {servicio}\nFecha: {fecha}\nHora: {hora}\nProfesional: {profesional}\n\nSi necesitas reprogramar, por favor escribenos por este WhatsApp.',
                     instagram: configData.instagram || '',
                     facebook: configData.facebook || '',
                     horario_atencion: configData.horario_atencion || '',
@@ -177,12 +173,10 @@ function EditarNegocio() {
                 direccion: config.direccion || null,
                 mensaje_bienvenida: config.mensaje_bienvenida,
                 mensaje_confirmacion: config.mensaje_confirmacion,
-                mensaje_inasistencia: config.mensaje_inasistencia || null,
                 instagram: config.instagram || null,
                 facebook: config.facebook || null,
                 horario_atencion: config.horario_atencion || null,
                 logo_url: logo_url,
-                imagen_fondo_tipo: config.imagen_fondo_tipo || 'unas',
                 // 🆕 INCLUIR CAMPOS DE ANTICIPO
                 requiere_anticipo: config.requiere_anticipo,
                 tipo_anticipo: config.tipo_anticipo,
@@ -386,34 +380,6 @@ function EditarNegocio() {
                                         </div>
                                     )}
                                 </div>
-                            </div>
-
-                            {/* Fondo de la app de clientes */}
-                            <div className="mb-4">
-                                <label className="block text-sm font-medium text-gray-700 mb-2">
-                                    Imagen de fondo para clientes
-                                </label>
-                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                                    {(window.HERO_BACKGROUND_OPTIONS || []).map((opcion) => (
-                                        <button
-                                            type="button"
-                                            key={opcion.id}
-                                            onClick={() => setConfig({...config, imagen_fondo_tipo: opcion.id})}
-                                            className={`overflow-hidden rounded-lg border-2 bg-white text-left transition ${
-                                                config.imagen_fondo_tipo === opcion.id
-                                                    ? 'border-amber-600 ring-2 ring-amber-200'
-                                                    : 'border-gray-200 hover:border-amber-300'
-                                            }`}
-                                        >
-                                            <img src={opcion.image} alt={opcion.label} className="h-24 w-full object-cover" />
-                                            <div className="p-3">
-                                                <p className="text-sm font-semibold text-gray-900">{opcion.label}</p>
-                                                <p className="text-xs text-gray-500 mt-1">{opcion.description}</p>
-                                            </div>
-                                        </button>
-                                    ))}
-                                </div>
-                                <p className="text-xs text-gray-500 mt-2">Esta imagen se vera en la pantalla de acceso y bienvenida de la clienta.</p>
                             </div>
 
                             {/* Horario de atención */}
@@ -641,20 +607,6 @@ function EditarNegocio() {
                                         className="w-full border rounded-lg px-3 py-2"
                                         rows="3"
                                     />
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                                        Mensaje por inasistencia
-                                    </label>
-                                    <textarea
-                                        value={config.mensaje_inasistencia}
-                                        onChange={(e) => setConfig({...config, mensaje_inasistencia: e.target.value})}
-                                        className="w-full border rounded-lg px-3 py-2"
-                                        rows="6"
-                                    />
-                                    <p className="text-xs text-gray-400 mt-1">
-                                        Variables: {'{cliente}'}, {'{nombre_negocio}'}, {'{servicio}'}, {'{fecha}'}, {'{hora}'}, {'{profesional}'}.
-                                    </p>
                                 </div>
                             </div>
                         </div>

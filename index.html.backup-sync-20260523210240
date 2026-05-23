@@ -62,7 +62,6 @@
 
     <!-- Scripts (rutas relativas) -->
     <script src="utils/supabase-config.js"></script>
-    <script src="utils/hero-backgrounds.js?v=20260522-fondos-lashes-peluqueria"></script>
     <script src="utils/config-negocio.js"></script>
     <script src="utils/storage.js"></script>
     <script src="utils/api.js"></script>
@@ -72,7 +71,7 @@
     <script src="utils/config.js"></script>
     <script src="utils/servicios.js"></script>
     <script src="utils/profesionales.js"></script>
-    <script src="utils/whatsapp-helper.js?v=20260522-inasistencias"></script>
+    <script src="utils/whatsapp-helper.js"></script>
      <script src="utils/dias-cerrados.js"></script>
 
     <!-- Componentes -->
@@ -82,14 +81,14 @@
     <script src="components/ServiceSelectionCategorias.js?v=20260515-categorias-normalizadas" type="text/babel"></script>
     <script src="components/ProfesionalSelector.js" type="text/babel"></script>
     <script src="components/MultiProfesionalSelector.js" type="text/babel"></script>
-    <script src="components/Calendar.js?v=20260521-inicios-permitidos" type="text/babel"></script>
-    <script src="components/TimeSlots.js?v=20260521-inicios-permitidos" type="text/babel"></script>
-    <script src="components/MultiTimeSlots.js?v=20260521-inicios-permitidos" type="text/babel"></script>
-    <script src="components/BookingForm.js?v=20260521-inicios-permitidos" type="text/babel"></script>
+    <script src="components/Calendar.js?v=20260520-indefinido-cobro" type="text/babel"></script>
+    <script src="components/TimeSlots.js?v=20260520-indefinido-cobro" type="text/babel"></script>
+    <script src="components/MultiTimeSlots.js?v=20260516-horarios-flexibles" type="text/babel"></script>
+    <script src="components/BookingForm.js?v=20260517-anti-duplicados" type="text/babel"></script>
     <script src="components/Confirmation.js" type="text/babel"></script>
-    <script src="components/WelcomeScreen.js?v=20260521-fondos-clientes" type="text/babel"></script>
+    <script src="components/WelcomeScreen.js" type="text/babel"></script>
     <script src="components/WhatsAppButton.js" type="text/babel"></script>
-    <script src="components/ClientAuthScreen.js?v=20260521-fondos-clientes" type="text/babel"></script>
+    <script src="components/ClientAuthScreen.js" type="text/babel"></script>
     <script src="components/MyBookings.js" type="text/babel"></script>
     <script src="components/InstallButton.js" type="text/babel"></script>
     

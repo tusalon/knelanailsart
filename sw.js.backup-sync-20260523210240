@@ -1,6 +1,6 @@
 // sw.js - Service Worker para Knela nails art
 
-const CACHE_NAME = 'knelanailsart-v29';
+const CACHE_NAME = 'knelanailsart-v26';
 const urlsToCache = [
   '/knelanailsart/',
   '/knelanailsart/index.html',

@@ -358,11 +358,6 @@ const getCurrentLocalDate = () => {
     return `${year}-${month}-${day}`;
 };
 
-const getCurrentLocalMinutes = () => {
-    const ahora = new Date();
-    return ahora.getHours() * 60 + ahora.getMinutes();
-};
-
 const indiceToHoraLegible = (indice) => {
     const horas = Math.floor(indice / 2);
     const minutos = indice % 2 === 0 ? '00' : '30';
@@ -423,8 +418,6 @@ function AdminApp() {
     const [disponibilidadCargando, setDisponibilidadCargando] = React.useState(false);
     const [disponibilidadDias, setDisponibilidadDias] = React.useState({});
     const [disponibilidadConteos, setDisponibilidadConteos] = React.useState({});
-    const [modoDisponibilidad, setModoDisponibilidad] = React.useState('mes');
-    const [disponibilidadSemanal, setDisponibilidadSemanal] = React.useState([]);
     const [diasCerradosFechas, setDiasCerradosFechas] = React.useState([]);
     const [profesionalSeleccionadoDispo, setProfesionalSeleccionadoDispo] = React.useState(null);
     const [cobroEditando, setCobroEditando] = React.useState(null);
@@ -714,6 +707,8 @@ function AdminApp() {
             ? Number(serviciosSeleccionados[0]?.duracion || reservaEditando?.duracion || 60)
             : serviciosSeleccionados.reduce((total, servicio) => total + Number(servicio.duracion || 60), 0);
         const configGlobal = window.salonConfig ? await window.salonConfig.get() : {};
+        const duracionTurno = Number(configGlobal?.duracion_turnos || 60);
+        const intervaloTurnos = Number(configGlobal?.intervalo_entre_turnos || 0);
         const minAntelacionHoras = configGlobal?.min_antelacion_horas ?? 2;
         const maxAntelacionDias = configGlobal?.max_antelacion_dias ?? 30;
 
@@ -763,6 +758,10 @@ function AdminApp() {
             const fechaHoraSlot = new Date(year, month - 1, day, horas, minutos, 0);
 
             if (!reservaEditando && fechaHoraSlot < minFechaPermitida) return false;
+
+            if (!estaDentroBloqueTrabajo(slotStart, slotEnd, horasTrabajoFiltradas, duracionTurno, intervaloTurnos)) {
+                return false;
+            }
 
             if (slotTieneDescanso(slotStart, slotEnd, descansosDelDia)) {
                 return false;
@@ -828,6 +827,8 @@ function AdminApp() {
                 ? serviciosSeleccionados.reduce((total, servicio) => total + Number(servicio.duracion || 60), 0)
                 : (reservaEditando?.duracion || 60);
             const configGlobal = window.salonConfig ? await window.salonConfig.get() : {};
+            const duracionTurno = Number(configGlobal?.duracion_turnos || 60);
+            const intervaloTurnos = Number(configGlobal?.intervalo_entre_turnos || 0);
             const minAntelacionHoras = configGlobal?.min_antelacion_horas ?? 2;
             const maxAntelacionDias = configGlobal?.max_antelacion_dias ?? 30;
             
@@ -920,6 +921,10 @@ function AdminApp() {
                     const fechaHoraSlot = new Date(year, month, d, Math.floor(slotStart / 60), slotStart % 60, 0);
 
                     if (!reservaEditando && fechaHoraSlot < minFechaPermitida) {
+                        return false;
+                    }
+
+                    if (!estaDentroBloqueTrabajo(slotStart, slotEnd, horariosDelDia, duracionTurno, intervaloTurnos)) {
                         return false;
                     }
 
@@ -1098,97 +1103,6 @@ function AdminApp() {
         }
     };
 
-    const cargarDisponibilidadSemanal = async (fecha, profesionalId = null) => {
-        if (!profesionalId && profesionalesList.length > 0) profesionalId = profesionalesList[0]?.id;
-        if (!profesionalId) {
-            setDisponibilidadSemanal([]);
-            return;
-        }
-
-        setDisponibilidadCargando(true);
-        try {
-            const profesionalObj = profesionalesList.find(p => p.id === parseInt(profesionalId));
-            const horarios = await window.salonConfig.getHorariosProfesional(profesionalId);
-            const horasTrabajo = horarios.horas || [];
-            const diasTrabajo = horarios.dias || [];
-            const horariosPorDia = horarios.horariosPorDia || {};
-            const descansosPorDia = horarios.descansosPorDia || {};
-            const fechasLibresPersonales = profesionalObj?.fechas_libres || [];
-            const diasSemanaVista = getDiasSemanaDisponibilidad(fecha);
-            const fechaInicio = formatDate(diasSemanaVista[0]);
-            const fechaFin = formatDate(diasSemanaVista[6]);
-            const nombresDias = ['domingo', 'lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado'];
-            const negocioId = typeof getNegocioId === "function" ? getNegocioId() : (window.getNegocioIdFromConfig ? window.getNegocioIdFromConfig() : localStorage.getItem("negocioId"));
-            const response = await fetch(
-                `${window.SUPABASE_URL}/rest/v1/reservas?negocio_id=eq.${negocioId}&fecha=gte.${fechaInicio}&fecha=lte.${fechaFin}&profesional_id=eq.${profesionalId}&estado=neq.Cancelado&select=fecha,hora_inicio,hora_fin,cliente_nombre,servicio,estado`,
-                {
-                    headers: {
-                        'apikey': window.SUPABASE_ANON_KEY,
-                        'Authorization': `Bearer ${window.SUPABASE_ANON_KEY}`
-                    }
-                }
-            );
-
-            if (!response.ok) throw new Error(await response.text());
-            const reservas = await response.json();
-            const reservasPorFecha = {};
-            (reservas || []).forEach(r => {
-                if (!reservasPorFecha[r.fecha]) reservasPorFecha[r.fecha] = [];
-                reservasPorFecha[r.fecha].push(r);
-            });
-
-            const semana = diasSemanaVista.map(dia => {
-                const fechaStr = formatDate(dia);
-                const diaSemana = nombresDias[dia.getDay()];
-                const reservasDia = reservasPorFecha[fechaStr] || [];
-                const horariosDelDia = (horariosPorDia[diaSemana] && horariosPorDia[diaSemana].length ? horariosPorDia[diaSemana] : horasTrabajo) || [];
-                const descansosDelDia = descansosPorDia[diaSemana] || [];
-                const esCerrado = diasCerradosFechas.includes(fechaStr);
-                const esPasado = fechaStr < getCurrentLocalDate();
-                const esLibre = fechasLibresPersonales.includes(fechaStr);
-                const trabaja = !(diasTrabajo.length > 0 && !diasTrabajo.includes(diaSemana));
-
-                const turnos = horariosDelDia.map(horaIndice => {
-                    const hora = indiceToHoraLegible(horaIndice);
-                    const slotStart = timeToMinutes(hora);
-                    const slotEnd = slotStart + 60;
-
-                    if (esCerrado) return { hora, estado: 'Cerrado', detalle: 'Local cerrado' };
-                    if (esPasado) return { hora, estado: 'Pasado', detalle: 'Fecha pasada' };
-                    if (esLibre) return { hora, estado: 'Libre', detalle: `${profesionalObj?.nombre || 'Profesional'} no trabaja` };
-                    if (!trabaja) return { hora, estado: 'No trabaja', detalle: 'Dia no laboral' };
-                    if (slotTieneDescanso(slotStart, slotEnd, descansosDelDia)) return { hora, estado: 'Descanso', detalle: 'Descanso configurado' };
-
-                    const reserva = reservasDia.find(item => {
-                        const reservaStart = timeToMinutes(item.hora_inicio);
-                        const reservaEnd = timeToMinutes(item.hora_fin);
-                        return (slotStart < reservaEnd) && (slotEnd > reservaStart);
-                    });
-
-                    if (reserva) {
-                        return { hora, estado: 'Ocupado', detalle: `${reserva.cliente_nombre || 'Cliente'} - ${reserva.servicio || 'Servicio'}` };
-                    }
-
-                    return { hora, estado: 'Disponible', detalle: 'Disponible' };
-                });
-
-                return {
-                    fecha: fechaStr,
-                    diaNombre: diaSemana.charAt(0).toUpperCase() + diaSemana.slice(1),
-                    turnos,
-                    libres: turnos.filter(t => t.estado === 'Disponible').length
-                };
-            });
-
-            setDisponibilidadSemanal(semana);
-        } catch (error) {
-            console.error('Error cargando disponibilidad semanal:', error);
-            setDisponibilidadSemanal([]);
-        } finally {
-            setDisponibilidadCargando(false);
-        }
-    };
-
     // ============================================
     // FUNCIONES DEL CALENDARIO
     // ============================================
@@ -1268,241 +1182,7 @@ function AdminApp() {
         const nuevaFecha = new Date(disponibilidadFecha);
         nuevaFecha.setMonth(disponibilidadFecha.getMonth() + direccion);
         setDisponibilidadFecha(nuevaFecha);
-        if (modoDisponibilidad === 'semana') {
-            cargarDisponibilidadSemanal(nuevaFecha, profesionalSeleccionadoDispo);
-        } else {
-            cargarDisponibilidadDelMes(nuevaFecha, profesionalSeleccionadoDispo);
-        }
-    };
-
-    const inicioSemana = (date) => {
-        const base = new Date(date);
-        base.setHours(0, 0, 0, 0);
-        const dia = base.getDay();
-        const diff = dia === 0 ? -6 : 1 - dia;
-        base.setDate(base.getDate() + diff);
-        return base;
-    };
-
-    const getDiasSemanaDisponibilidad = (date) => {
-        const inicio = inicioSemana(date);
-        return Array.from({ length: 7 }, (_, index) => {
-            const dia = new Date(inicio);
-            dia.setDate(inicio.getDate() + index);
-            return dia;
-        });
-    };
-
-    const cambiarSemanaDisponibilidad = (direccion) => {
-        const nuevaFecha = new Date(disponibilidadFecha);
-        nuevaFecha.setDate(disponibilidadFecha.getDate() + (direccion * 7));
-        setDisponibilidadFecha(nuevaFecha);
-        cargarDisponibilidadSemanal(nuevaFecha, profesionalSeleccionadoDispo);
-    };
-
-    const compartirDisponibilidadSemanalTexto = () => {
-        const profesional = profesionalesList.find(p => p.id === parseInt(profesionalSeleccionadoDispo));
-        const lineas = [
-            `Disponibilidad semanal - ${nombreNegocio}`,
-            profesional ? `Profesional: ${profesional.nombre}` : '',
-            ''
-        ].filter(Boolean);
-
-        disponibilidadSemanal.forEach(dia => {
-            const disponibles = dia.turnos.filter(t => t.estado === 'Disponible').map(t => formatTo12Hour(t.hora));
-            const ocupados = dia.turnos.filter(t => t.estado === 'Ocupado').map(t => `${formatTo12Hour(t.hora)} ocupado`);
-            const estado = disponibles.length > 0 ? disponibles.join(', ') : 'Sin turnos disponibles';
-            lineas.push(`${dia.diaNombre} ${dia.fecha}: ${estado}`);
-            if (ocupados.length > 0) lineas.push(`Ocupados: ${ocupados.join(', ')}`);
-        });
-
-        const texto = encodeURIComponent(lineas.join('\n'));
-        window.open(`https://wa.me/?text=${texto}`, '_blank');
-    };
-
-    const canvasToBlob = (canvas) => new Promise(resolve => canvas.toBlob(resolve, 'image/png', 0.95));
-
-    const dibujarTextoCentrado = (ctx, texto, x, y, maxWidth, lineHeight) => {
-        const palabras = String(texto || '').split(' ');
-        const lineas = [];
-        let linea = '';
-
-        palabras.forEach(palabra => {
-            const prueba = linea ? `${linea} ${palabra}` : palabra;
-            if (ctx.measureText(prueba).width > maxWidth && linea) {
-                lineas.push(linea);
-                linea = palabra;
-            } else {
-                linea = prueba;
-            }
-        });
-        if (linea) lineas.push(linea);
-
-        lineas.forEach((item, index) => ctx.fillText(item, x, y + (index * lineHeight)));
-        return y + (lineas.length * lineHeight);
-    };
-
-    const generarImagenDisponibilidadSemanal = async () => {
-        const profesional = profesionalesList.find(p => p.id === parseInt(profesionalSeleccionadoDispo));
-        const canvas = document.createElement('canvas');
-        canvas.width = 1080;
-        canvas.height = 1920;
-        const ctx = canvas.getContext('2d');
-        const semanaInicio = disponibilidadSemanal[0]?.fecha || formatDate(getDiasSemanaDisponibilidad(disponibilidadFecha)[0]);
-        const semanaFin = disponibilidadSemanal[6]?.fecha || formatDate(getDiasSemanaDisponibilidad(disponibilidadFecha)[6]);
-
-        const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
-        gradient.addColorStop(0, '#fff7fb');
-        gradient.addColorStop(0.45, '#ffffff');
-        gradient.addColorStop(1, '#fdf2f8');
-        ctx.fillStyle = gradient;
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-        ctx.fillStyle = '#be185d';
-        ctx.beginPath();
-        ctx.arc(980, 120, 180, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = 'rgba(244,114,182,0.22)';
-        ctx.beginPath();
-        ctx.arc(120, 1820, 220, 0, Math.PI * 2);
-        ctx.fill();
-
-        ctx.textAlign = 'center';
-        ctx.fillStyle = '#831843';
-        ctx.font = '800 58px Arial';
-        dibujarTextoCentrado(ctx, nombreNegocio || 'Exotic Nails by Yuly', 540, 145, 850, 64);
-
-        ctx.fillStyle = '#374151';
-        ctx.font = '700 34px Arial';
-        ctx.fillText('Disponibilidad semanal', 540, 265);
-
-        ctx.fillStyle = '#6b7280';
-        ctx.font = '500 28px Arial';
-        ctx.fillText(`${semanaInicio} - ${semanaFin}`, 540, 312);
-        if (profesional?.nombre) {
-            ctx.fillText(`Profesional: ${profesional.nombre}`, 540, 355);
-        }
-
-        const cardX = 70;
-        const cardY = 430;
-        const cardW = 940;
-        const cardH = 1230;
-        const columnW = cardW / 7;
-        const radius = 34;
-
-        ctx.fillStyle = '#ffffff';
-        ctx.shadowColor = 'rgba(15, 23, 42, 0.14)';
-        ctx.shadowBlur = 30;
-        ctx.shadowOffsetY = 14;
-        ctx.beginPath();
-        ctx.roundRect(cardX, cardY, cardW, cardH, radius);
-        ctx.fill();
-        ctx.shadowColor = 'transparent';
-
-        disponibilidadSemanal.forEach((dia, index) => {
-            const x = cardX + (index * columnW);
-            const disponibles = dia.turnos.filter(turno => turno.estado === 'Disponible');
-            const headerH = 150;
-
-            ctx.fillStyle = disponibles.length > 0 ? '#ecfdf5' : '#f3f4f6';
-            ctx.beginPath();
-            ctx.rect(x, cardY, columnW, headerH);
-            ctx.fill();
-
-            if (index > 0) {
-                ctx.strokeStyle = '#e5e7eb';
-                ctx.lineWidth = 2;
-                ctx.beginPath();
-                ctx.moveTo(x, cardY);
-                ctx.lineTo(x, cardY + cardH);
-                ctx.stroke();
-            }
-
-            ctx.textAlign = 'center';
-            ctx.fillStyle = '#111827';
-            ctx.font = '800 27px Arial';
-            ctx.fillText(dia.diaNombre.slice(0, 3).toUpperCase(), x + columnW / 2, cardY + 58);
-            ctx.fillStyle = '#6b7280';
-            ctx.font = '600 21px Arial';
-            ctx.fillText(dia.fecha.slice(5), x + columnW / 2, cardY + 94);
-
-            const slotX = x + 12;
-            let y = cardY + headerH + 42;
-            const slotW = columnW - 24;
-            const slotH = 82;
-            const gap = 24;
-
-            if (disponibles.length === 0) {
-                ctx.strokeStyle = '#d1d5db';
-                ctx.setLineDash([8, 8]);
-                ctx.strokeRect(slotX, y, slotW, 190);
-                ctx.setLineDash([]);
-                ctx.fillStyle = '#9ca3af';
-                ctx.font = '700 20px Arial';
-                dibujarTextoCentrado(ctx, 'Sin turnos', x + columnW / 2, y + 90, slotW - 16, 24);
-            } else {
-                disponibles.slice(0, 8).forEach(turno => {
-                    const g = ctx.createLinearGradient(slotX, y, slotX, y + slotH);
-                    g.addColorStop(0, '#34d399');
-                    g.addColorStop(1, '#16a34a');
-                    ctx.fillStyle = g;
-                    ctx.beginPath();
-                    ctx.roundRect(slotX, y, slotW, slotH, 22);
-                    ctx.fill();
-
-                    ctx.fillStyle = '#ffffff';
-                    ctx.font = '900 24px Arial';
-                    ctx.fillText(formatTo12Hour(turno.hora).replace(' ', ''), x + columnW / 2, y + 50);
-                    y += slotH + gap;
-                });
-            }
-        });
-
-        ctx.fillStyle = '#831843';
-        ctx.font = '800 34px Arial';
-        ctx.fillText('Reserva tu turno', 540, 1740);
-        ctx.fillStyle = '#6b7280';
-        ctx.font = '500 26px Arial';
-        ctx.fillText('Horarios sujetos a disponibilidad al momento de reservar', 540, 1790);
-
-        ctx.fillStyle = '#be185d';
-        ctx.font = '800 30px Arial';
-        ctx.fillText('ByReservasRoma', 540, 1850);
-
-        return canvas;
-    };
-
-    const compartirDisponibilidadSemanal = async () => {
-        try {
-            if (!disponibilidadSemanal.length) return;
-            const canvas = await generarImagenDisponibilidadSemanal();
-            const blob = await canvasToBlob(canvas);
-            if (!blob) {
-                compartirDisponibilidadSemanalTexto();
-                return;
-            }
-
-            const file = new File([blob], `disponibilidad-${nombreNegocio || 'salon'}.png`, { type: 'image/png' });
-            if (navigator.canShare && navigator.canShare({ files: [file] }) && navigator.share) {
-                await navigator.share({
-                    title: `Disponibilidad semanal - ${nombreNegocio}`,
-                    text: `Disponibilidad semanal de ${nombreNegocio}`,
-                    files: [file]
-                });
-                return;
-            }
-
-            const url = URL.createObjectURL(blob);
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = file.name;
-            link.target = '_blank';
-            link.click();
-            setTimeout(() => URL.revokeObjectURL(url), 60000);
-        } catch (error) {
-            console.error('Error generando imagen de disponibilidad:', error);
-            compartirDisponibilidadSemanalTexto();
-        }
+        cargarDisponibilidadDelMes(nuevaFecha, profesionalSeleccionadoDispo);
     };
 
     // ============================================
@@ -2069,8 +1749,8 @@ Cualquier cambio, pod√©s cancelarlo desde la app con hasta 1 hora de anticipaci√
         }
 
         const estado = bookingData?.estado;
-        if (estado !== 'Cancelado' && estado !== 'Completado' && estado !== 'Ausente') {
-            alert('Solo se pueden eliminar citas canceladas, completadas o ausentes.');
+        if (estado !== 'Cancelado' && estado !== 'Completado') {
+            alert('Solo se pueden eliminar citas canceladas o completadas.');
             return;
         }
 
@@ -2190,72 +1870,6 @@ Cualquier cambio, pod√©s cancelarlo desde la app con hasta 1 hora de anticipaci√
         }
     };
 
-    const turnoYaPaso = (bookingData) => {
-        if (!bookingData?.fecha) return false;
-        const hoy = getCurrentLocalDate();
-        if (bookingData.fecha < hoy) return true;
-        if (bookingData.fecha > hoy) return false;
-        const fin = bookingData.hora_fin || calculateEndTime(bookingData.hora_inicio, bookingData.duracion || 60);
-        return timeToMinutes(fin) <= getCurrentLocalMinutes();
-    };
-
-    const marcarAusencia = async (bookingData) => {
-        if (!puedeGestionarReservas) {
-            alert('No tenes permiso para marcar ausencias.');
-            return;
-        }
-
-        if (!turnoYaPaso(bookingData)) {
-            alert('Solo se puede marcar ausencia en turnos que ya pasaron.');
-            return;
-        }
-
-        const estado = bookingData?.estado;
-        if (estado === 'Cancelado' || estado === 'Ausente') {
-            alert('Esta cita no se puede marcar como ausencia.');
-            return;
-        }
-
-        const reservasGrupo = bookingData?._reservasGrupo || [];
-        const reservas = reservasGrupo.length > 0 ? reservasGrupo : [bookingData];
-        const ids = reservas.map(reserva => reserva.id).filter(Boolean);
-        const detalle = reservas.length > 1 ? `la cita completa (${reservas.length} servicios)` : 'esta cita';
-        if (!ids.length) return;
-
-        if (!confirm(`Marcar ${detalle} como AUSENTE?`)) return;
-        const enviarMensaje = confirm('Quieres enviarle ahora el mensaje de inasistencia por WhatsApp?');
-
-        try {
-            const negocioId = getNegocioId();
-            const response = await fetch(
-                `${window.SUPABASE_URL}/rest/v1/reservas?negocio_id=eq.${negocioId}&id=in.(${ids.join(',')})`,
-                {
-                    method: 'PATCH',
-                    headers: {
-                        'apikey': window.SUPABASE_ANON_KEY,
-                        'Authorization': `Bearer ${window.SUPABASE_ANON_KEY}`,
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ estado: 'Ausente' })
-                }
-            );
-
-            if (!response.ok) {
-                throw new Error(await response.text());
-            }
-
-            if (enviarMensaje && window.enviarMensajeInasistencia) {
-                await window.enviarMensajeInasistencia(bookingData, config);
-            }
-
-            alert(enviarMensaje ? 'Ausencia marcada y WhatsApp preparado.' : 'Ausencia marcada.');
-            fetchBookings();
-        } catch (error) {
-            console.error('Error marcando ausencia:', error);
-            alert('Error al marcar la ausencia.');
-        }
-    };
-
     // ============================================
     // HANDLE CANCEL
     // ============================================
@@ -2345,8 +1959,6 @@ Cualquier cambio, pod√©s cancelarlo desde la app con hasta 1 hora de anticipaci√
             resultado = filtradas.filter(b => b.estado === 'Pendiente');
         } else if (statusFilter === 'completadas') {
             resultado = filtradas.filter(b => b.estado === 'Completado');
-        } else if (statusFilter === 'ausentes') {
-            resultado = filtradas.filter(b => b.estado === 'Ausente');
         } else if (statusFilter === 'canceladas') {
             resultado = filtradas.filter(b => b.estado === 'Cancelado');
         } else {
@@ -2361,7 +1973,6 @@ Cualquier cambio, pod√©s cancelarlo desde la app con hasta 1 hora de anticipaci√
     const activasCount = bookings.filter(b => b.estado === 'Reservado').length;
     const pendientesCount = bookings.filter(b => b.estado === 'Pendiente').length;
     const completadasCount = bookings.filter(b => b.estado === 'Completado').length;
-    const ausentesCount = bookings.filter(b => b.estado === 'Ausente').length;
     const canceladasCount = bookings.filter(b => b.estado === 'Cancelado').length;
     const filteredBookings = getFilteredBookings();
 
@@ -2467,15 +2078,14 @@ Cualquier cambio, pod√©s cancelarlo desde la app con hasta 1 hora de anticipaci√
     const agendaStatusStyle = {
         Reservado: 'bg-pink-500 border-pink-600 text-white',
         Pendiente: 'bg-amber-400 border-amber-500 text-amber-950',
-        Completado: 'bg-emerald-500 border-emerald-600 text-white',
-        Ausente: 'bg-slate-500 border-slate-600 text-white'
+        Completado: 'bg-emerald-500 border-emerald-600 text-white'
     };
     const estadoNormalizado = (estado) => String(estado || '').trim().toLowerCase();
     const puedeEditarReserva = (booking) => {
         const estado = estadoNormalizado(booking.estado);
         if (!puedeGestionarReservas) return false;
         if (userRole === 'profesional' && profesional && Number(booking.profesional_id) !== Number(profesional.id)) return false;
-        return estado !== 'cancelado' && estado !== 'cancelada' && estado !== 'completado' && estado !== 'completada' && estado !== 'ausente';
+        return estado !== 'cancelado' && estado !== 'cancelada' && estado !== 'completado' && estado !== 'completada';
     };
 
     const getAgendaDayBookings = (date) => {
@@ -2712,7 +2322,6 @@ Cualquier cambio, pod√©s cancelarlo desde la app con hasta 1 hora de anticipaci√
         if (profesionalId) {
             setProfesionalSeleccionadoDispo(profesionalId);
         }
-        setModoDisponibilidad('mes');
         setShowDisponibilidadModal(true);
         cargarDisponibilidadDelMes(fechaActual, profesionalId);
     };
@@ -3105,25 +2714,24 @@ Cualquier cambio, pod√©s cancelarlo desde la app con hasta 1 hora de anticipaci√
 
                 {/* MODAL CALENDARIO DE DISPONIBILIDAD */}
                 {showDisponibilidadModal && (
-                    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-2 sm:p-4">
-                        <div className="bg-white rounded-xl max-w-5xl w-full p-3 sm:p-6 max-h-[96vh] overflow-y-auto">
-                            <div className="flex justify-between items-center mb-3">
-                                <h3 className="text-lg sm:text-xl font-bold">üìÜ Disponibilidad</h3>
+                    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+                        <div className="bg-white rounded-xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
+                            <div className="flex justify-between items-center mb-4">
+                                <h3 className="text-xl font-bold">üìÜ Disponibilidad mensual</h3>
                                 <button onClick={() => setShowDisponibilidadModal(false)} className="text-gray-500 hover:text-gray-700 text-2xl">√ó</button>
                             </div>
                             
                             {userRole === 'admin' && profesionalesList.length > 0 && (
-                                <div className="mb-3">
-                                    <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-1">Profesional:</label>
+                                <div className="mb-4">
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Profesional:</label>
                                     <select
                                         value={profesionalSeleccionadoDispo || ''}
                                         onChange={(e) => {
                                             const id = e.target.value ? parseInt(e.target.value) : null;
                                             setProfesionalSeleccionadoDispo(id);
-                                            if (modoDisponibilidad === 'semana') cargarDisponibilidadSemanal(disponibilidadFecha, id);
-                                            else cargarDisponibilidadDelMes(disponibilidadFecha, id);
+                                            cargarDisponibilidadDelMes(disponibilidadFecha, id);
                                         }}
-                                        className="w-full border rounded-lg px-3 py-2 text-sm"
+                                        className="w-full border rounded-lg px-3 py-2"
                                     >
                                         <option value="">Seleccionar profesional</option>
                                         {profesionalesList.map(p => (
@@ -3133,74 +2741,14 @@ Cualquier cambio, pod√©s cancelarlo desde la app con hasta 1 hora de anticipaci√
                                 </div>
                             )}
                             
-                            <div className="flex gap-2 mb-3">
-                                <button onClick={() => { setModoDisponibilidad('mes'); cargarDisponibilidadDelMes(disponibilidadFecha, profesionalSeleccionadoDispo); }} className={`flex-1 px-3 py-2 rounded-lg text-sm font-semibold ${modoDisponibilidad === 'mes' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}>Mensual</button>
-                                <button onClick={() => { setModoDisponibilidad('semana'); cargarDisponibilidadSemanal(disponibilidadFecha, profesionalSeleccionadoDispo); }} className={`flex-1 px-3 py-2 rounded-lg text-sm font-semibold ${modoDisponibilidad === 'semana' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}>Semanal</button>
-                            </div>
-
-                            <div className="flex justify-between items-center mb-3">
-                                <button onClick={() => modoDisponibilidad === 'semana' ? cambiarSemanaDisponibilidad(-1) : cambiarMesDisponibilidad(-1)} className="px-3 py-2 bg-gray-100 rounded-lg hover:bg-gray-200">‚Äπ</button>
-                                <span className="text-sm sm:text-lg font-bold text-center px-2">
-                                    {modoDisponibilidad === 'semana' ? `${formatDate(getDiasSemanaDisponibilidad(disponibilidadFecha)[0])} - ${formatDate(getDiasSemanaDisponibilidad(disponibilidadFecha)[6])}` : `${monthNames[disponibilidadFecha.getMonth()]} ${disponibilidadFecha.getFullYear()}`}
-                                </span>
-                                <button onClick={() => modoDisponibilidad === 'semana' ? cambiarSemanaDisponibilidad(1) : cambiarMesDisponibilidad(1)} className="px-3 py-2 bg-gray-100 rounded-lg hover:bg-gray-200">‚Ä∫</button>
+                            <div className="flex justify-between items-center mb-4">
+                                <button onClick={() => cambiarMesDisponibilidad(-1)} className="px-3 py-2 bg-gray-100 rounded-lg hover:bg-gray-200">‚Äπ</button>
+                                <span className="text-lg font-bold">{monthNames[disponibilidadFecha.getMonth()]} {disponibilidadFecha.getFullYear()}</span>
+                                <button onClick={() => cambiarMesDisponibilidad(1)} className="px-3 py-2 bg-gray-100 rounded-lg hover:bg-gray-200">‚Ä∫</button>
                             </div>
                             
                             {disponibilidadCargando ? (
                                 <div className="text-center py-12"><div className="animate-spin h-8 w-8 border-b-2 border-pink-500 mx-auto"></div><p className="mt-2">Cargando disponibilidad...</p></div>
-                            ) : modoDisponibilidad === 'semana' ? (
-                                <div className="space-y-4">
-                                    <div className="flex items-center justify-between gap-2">
-                                        <div>
-                                            <p className="text-sm font-bold text-gray-900">Disponibilidad semanal</p>
-                                            <p className="text-xs text-gray-500">Turnos libres en verde para compartir.</p>
-                                        </div>
-                                        <button
-                                            onClick={compartirDisponibilidadSemanal}
-                                            disabled={disponibilidadSemanal.length === 0}
-                                            className="px-4 py-2 bg-green-600 text-white rounded-xl text-xs sm:text-sm font-bold hover:bg-green-700 disabled:opacity-50 shadow-sm"
-                                        >
-                                            Compartir
-                                        </button>
-                                    </div>
-
-                                    <div className="rounded-2xl border border-pink-100 bg-white overflow-hidden shadow-sm">
-                                        <div className="grid grid-cols-7 divide-x divide-gray-200">
-                                            {disponibilidadSemanal.map(dia => {
-                                                const disponibles = dia.turnos.filter(turno => turno.estado === 'Disponible');
-                                                const diaCorto = dia.diaNombre.slice(0, 3);
-                                                const fechaCorta = dia.fecha.slice(5);
-
-                                                return (
-                                                <div key={dia.fecha} className="bg-gradient-to-b from-white to-pink-50/50 min-w-0 min-h-[190px] sm:min-h-[260px]">
-                                                    <div className={`px-1 py-3 sm:p-4 border-b text-center ${dia.libres > 0 ? 'bg-green-50 border-green-100' : 'bg-gray-100 border-gray-200'}`}>
-                                                        <p className="font-extrabold text-gray-900 leading-tight text-[11px] sm:text-base uppercase truncate">{diaCorto}</p>
-                                                        <p className="text-[9px] sm:text-xs text-gray-500 leading-tight mt-1">{fechaCorta}</p>
-                                                    </div>
-
-                                                    <div className="px-1.5 py-3 sm:p-4 space-y-2 sm:space-y-3">
-                                                        {disponibles.length === 0 ? (
-                                                            <div className="h-24 sm:h-32 rounded-xl border border-dashed border-gray-200 bg-white/70 text-gray-400 text-[9px] sm:text-xs flex items-center justify-center text-center px-1 leading-tight">
-                                                                Sin turnos
-                                                            </div>
-                                                        ) : (
-                                                            disponibles.map(turno => (
-                                                                <div key={`${dia.fecha}-${turno.hora}`} className="rounded-xl border border-green-600 bg-gradient-to-b from-emerald-400 to-green-600 text-white px-1 py-3 sm:py-4 text-center shadow-md" title={turno.detalle}>
-                                                                    <div className="text-[12px] sm:text-lg font-extrabold leading-none whitespace-nowrap">{formatTo12Hour(turno.hora).replace(' ', '')}</div>
-                                                                </div>
-                                                            ))
-                                                        )}
-                                                    </div>
-                                                </div>
-                                            );})}
-                                        </div>
-                                    </div>
-
-                                    <div className="flex flex-wrap gap-3 text-[11px] sm:text-xs text-gray-600">
-                                        <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded bg-green-500"></span>Disponible</span>
-                                        <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded bg-gray-100 border border-gray-200"></span>Sin turnos</span>
-                                    </div>
-                                </div>
                             ) : (
                                 <div>
                                     <div className="grid grid-cols-7 mb-2 text-center">
@@ -3244,14 +2792,14 @@ Cualquier cambio, pod√©s cancelarlo desde la app con hasta 1 hora de anticipaci√
                                 </div>
                             )}
                             
-                            {modoDisponibilidad === 'mes' && <div className="mt-4 p-3 bg-gray-50 rounded-lg text-xs">
+                            <div className="mt-4 p-3 bg-gray-50 rounded-lg text-xs">
                                 <div className="flex flex-wrap gap-4">
                                     <div className="flex items-center gap-2"><div className="w-5 h-5 bg-green-100 border border-green-300 rounded-full flex items-center justify-center text-[10px] font-bold text-green-700">6</div><span>4+ tranquilo</span></div>
                                     <div className="flex items-center gap-2"><div className="w-5 h-5 bg-yellow-100 border border-yellow-300 rounded-full flex items-center justify-center text-[10px] font-bold text-yellow-700">3</div><span>3 medio</span></div>
                                     <div className="flex items-center gap-2"><div className="w-5 h-5 bg-red-100 border border-red-300 rounded-full flex items-center justify-center text-[10px] font-bold text-red-700">2</div><span>1-2 urgente</span></div>
                                     <div className="flex items-center gap-2"><div className="w-5 h-5 bg-gray-100 border border-gray-200 rounded-full flex items-center justify-center text-[10px] font-bold text-gray-400">0</div><span>Sin horarios</span></div>
                                 </div>
-                            </div>}
+                            </div>
                         </div>
                     </div>
                 )}
@@ -3655,7 +3203,6 @@ Cualquier cambio, pod√©s cancelarlo desde la app con hasta 1 hora de anticipaci√
                                 <button onClick={() => setStatusFilter('activas')} className={`px-4 py-2 rounded-lg text-sm font-medium ${statusFilter === 'activas' ? 'bg-pink-500 text-white' : 'bg-gray-100 text-gray-700'}`}>Activas ({activasCount})</button>
                                 <button onClick={() => setStatusFilter('pendientes')} className={`px-4 py-2 rounded-lg text-sm font-medium ${statusFilter === 'pendientes' ? 'bg-yellow-500 text-white' : 'bg-gray-100 text-gray-700'}`}>Pendientes ({pendientesCount})</button>
                                 <button onClick={() => setStatusFilter('completadas')} className={`px-4 py-2 rounded-lg text-sm font-medium ${statusFilter === 'completadas' ? 'bg-pink-500 text-white' : 'bg-gray-100 text-gray-700'}`}>Completadas ({completadasCount})</button>
-                                <button onClick={() => setStatusFilter('ausentes')} className={`px-4 py-2 rounded-lg text-sm font-medium ${statusFilter === 'ausentes' ? 'bg-slate-600 text-white' : 'bg-gray-100 text-gray-700'}`}>Ausentes ({ausentesCount})</button>
                                 <button onClick={() => setStatusFilter('canceladas')} className={`px-4 py-2 rounded-lg text-sm font-medium ${statusFilter === 'canceladas' ? 'bg-pink-500 text-white' : 'bg-gray-100 text-gray-700'}`}>Canceladas ({canceladasCount})</button>
                                 <button onClick={() => setStatusFilter('todas')} className={`px-4 py-2 rounded-lg text-sm font-medium ${statusFilter === 'todas' ? 'bg-pink-500 text-white' : 'bg-gray-100 text-gray-700'}`}>Todas ({bookings.length})</button>
                                 {puedeGestionarAvanzado && statusFilter === 'canceladas' && (
@@ -3676,7 +3223,6 @@ Cualquier cambio, pod√©s cancelarlo desde la app con hasta 1 hora de anticipaci√
                                             b.estado === 'Reservado' ? 'border-l-pink-500' :
                                             b.estado === 'Pendiente' ? 'border-l-yellow-500' :
                                             b.estado === 'Completado' ? 'border-l-green-500' :
-                                            b.estado === 'Ausente' ? 'border-l-slate-500' :
                                             'border-l-red-500'
                                         }`}>
                                             <div className="flex justify-between mb-2">
@@ -3706,7 +3252,7 @@ Cualquier cambio, pod√©s cancelarlo desde la app con hasta 1 hora de anticipaci√
                                                 )}
                                             </div>
                                             <div className="flex justify-between items-center mt-3 pt-2 border-t">
-                                                <span className={`px-2 py-1 rounded-full text-xs font-semibold ${b.estado === 'Reservado' ? 'bg-pink-100 text-pink-700' : b.estado === 'Pendiente' ? 'bg-yellow-100 text-yellow-700' : b.estado === 'Completado' ? 'bg-green-100 text-green-700' : b.estado === 'Ausente' ? 'bg-slate-100 text-slate-700' : 'bg-red-100 text-red-700'}`}>
+                                                <span className={`px-2 py-1 rounded-full text-xs font-semibold ${b.estado === 'Reservado' ? 'bg-pink-100 text-pink-700' : b.estado === 'Pendiente' ? 'bg-yellow-100 text-yellow-700' : b.estado === 'Completado' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
                                                     {b.estado}
                                                 </span>
                                                 <div className="flex flex-wrap justify-end gap-2">
@@ -3724,10 +3270,7 @@ Cualquier cambio, pod√©s cancelarlo desde la app con hasta 1 hora de anticipaci√
                                                             {Number(b.monto_cobrado || 0) > 0 ? 'Editar cobro' : 'Cobro real'}
                                                         </button>
                                                     )}
-                                                    {puedeGestionarReservas && turnoYaPaso(b) && b.estado !== 'Cancelado' && b.estado !== 'Ausente' && (
-                                                        <button onClick={() => marcarAusencia(b)} className="px-3 py-1 bg-slate-600 text-white rounded-lg text-sm hover:bg-slate-700">Marcar ausencia</button>
-                                                    )}
-                                                    {puedeGestionarAvanzado && (b.estado === 'Cancelado' || b.estado === 'Completado' || b.estado === 'Ausente') && (
+                                                    {puedeGestionarAvanzado && (b.estado === 'Cancelado' || b.estado === 'Completado') && (
                                                         <button onClick={() => eliminarReservaHistorial(b)} className="px-3 py-1 bg-gray-700 text-white rounded-lg text-sm hover:bg-gray-800">Eliminar</button>
                                                     )}
                                                 </div>
