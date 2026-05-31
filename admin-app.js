@@ -87,7 +87,47 @@ async function getAllBookings() {
     }
 }
 
-async function cancelBooking(id) {
+async function deleteExpiredPendingBookings(configNegocio = {}) {
+    try {
+        const negocioId = getNegocioId();
+        if (!negocioId) return 0;
+
+        const horasVencimiento = Number(configNegocio?.tiempo_vencimiento || 2);
+        if (!Number.isFinite(horasVencimiento) || horasVencimiento <= 0) return 0;
+
+        const limite = new Date(Date.now() - (horasVencimiento * 60 * 60 * 1000)).toISOString();
+        const url = `${window.SUPABASE_URL}/rest/v1/reservas?negocio_id=eq.${negocioId}&estado=eq.Pendiente&created_at=lt.${encodeURIComponent(limite)}&select=*`;
+
+        const res = await fetch(url, {
+            method: 'DELETE',
+            headers: {
+                'apikey': window.SUPABASE_ANON_KEY,
+                'Authorization': `Bearer ${window.SUPABASE_ANON_KEY}`,
+                'Prefer': 'return=representation'
+            }
+        });
+
+        if (!res.ok) {
+            console.error('Error eliminando reservas pendientes vencidas:', await res.text());
+            return 0;
+        }
+
+        const eliminadas = await res.json();
+        if (Array.isArray(eliminadas) && eliminadas.length > 0) {
+            console.log(`Reservas pendientes vencidas eliminadas: ${eliminadas.length}`);
+            for (const booking of eliminadas) {
+                await window.notificarListaEsperaTurnoLiberado?.(booking);
+            }
+        }
+
+        return Array.isArray(eliminadas) ? eliminadas.length : 0;
+    } catch (error) {
+        console.error('Error limpiando reservas pendientes vencidas:', error);
+        return 0;
+    }
+}
+
+async function cancelBooking(id, bookingData = null) {
     try {
         const negocioId = getNegocioId();
         if (!negocioId) {
@@ -113,6 +153,10 @@ async function cancelBooking(id) {
         if (!res.ok) {
             console.error('Error al cancelar:', await res.text());
             return false;
+        }
+
+        if (bookingData) {
+            await window.notificarListaEsperaTurnoLiberado?.(bookingData);
         }
         
         return true;
@@ -369,6 +413,12 @@ const indiceToHoraLegible = (indice) => {
     return `${horas.toString().padStart(2, '0')}:${minutos}`;
 };
 
+const minutesToHoraLegible = (minutosTotales) => {
+    const horas = Math.floor(minutosTotales / 60);
+    const minutos = minutosTotales % 60;
+    return `${horas.toString().padStart(2, '0')}:${minutos.toString().padStart(2, '0')}`;
+};
+
 // ============================================
 // COMPONENTE PRINCIPAL
 // ============================================
@@ -391,14 +441,17 @@ function AdminApp() {
     const [agendaDate, setAgendaDate] = React.useState(new Date());
     const [agendaMode, setAgendaMode] = React.useState('dia');
     const [agendaDetalleBooking, setAgendaDetalleBooking] = React.useState(null);
+    const [estadisticasPeriodo, setEstadisticasPeriodo] = React.useState('mes');
+    const [estadisticasFecha, setEstadisticasFecha] = React.useState(getCurrentLocalDate());
     
     const [showClientesRegistrados, setShowClientesRegistrados] = React.useState(false);
     const [clientesRegistrados, setClientesRegistrados] = React.useState([]);
     const [errorClientes, setErrorClientes] = React.useState('');
     const [cargandoClientes, setCargandoClientes] = React.useState(false);
+    const [importandoClientesCsv, setImportandoClientesCsv] = React.useState(false);
     const [clientesBloqueados, setClientesBloqueados] = React.useState([]);
     const [cargandoBloqueados, setCargandoBloqueados] = React.useState(false);
-    const [nuevoBloqueo, setNuevoBloqueo] = React.useState({ nombre: '', whatsapp: '', motivo: '' });
+    const [nuevoBloqueo, setNuevoBloqueo] = React.useState({ nombre: '', whatsapp: '', codigo_pais: '53', motivo: '' });
     const [busquedaClienteManual, setBusquedaClienteManual] = React.useState('');
 
     const [showNuevaReservaModal, setShowNuevaReservaModal] = React.useState(false);
@@ -408,10 +461,12 @@ function AdminApp() {
     const [nuevaReservaData, setNuevaReservaData] = React.useState({
         cliente_nombre: '',
         cliente_whatsapp: '',
+        cliente_codigo_pais: '53',
         servicio: '',
         profesional_id: '',
         fecha: '',
         hora_inicio: '',
+        duracion_personalizada: '',
         requiereAnticipo: false
     });
     const [serviciosManualSeleccionados, setServiciosManualSeleccionados] = React.useState([]);
@@ -435,6 +490,7 @@ function AdminApp() {
     const [profesionalesList, setProfesionalesList] = React.useState([]);
     const [profesionalesManualFiltrados, setProfesionalesManualFiltrados] = React.useState([]);
     const [horariosDisponibles, setHorariosDisponibles] = React.useState([]);
+    const [modoHorarioManualCompleto, setModoHorarioManualCompleto] = React.useState(false);
     const [currentDate, setCurrentDate] = React.useState(new Date());
     const [diasLaborales, setDiasLaborales] = React.useState([]);
     const [fechasConHorarios, setFechasConHorarios] = React.useState({});
@@ -443,6 +499,10 @@ function AdminApp() {
     const esProfesionalPanel = userRole === 'profesional';
     const puedeGestionarReservas = esAdminPanel || (esProfesionalPanel && userNivel >= 2);
     const puedeGestionarAvanzado = esAdminPanel || (esProfesionalPanel && userNivel >= 3);
+    const codigoPaisNegocio = window.getCodigoPaisTelefono ? window.getCodigoPaisTelefono(config) : '53';
+    const codigoPaisClienteManual = nuevaReservaData.cliente_codigo_pais || codigoPaisNegocio;
+    const paisTelefono = window.getPhoneCountryConfig ? window.getPhoneCountryConfig({ codigo_pais: codigoPaisClienteManual }) : { codigo: '53', bandera: '🇨🇺', ejemplo: '55002272' };
+    const paisesTelefono = window.PHONE_COUNTRIES || [paisTelefono];
 
     const getServicioManual = (servicioNombre = nuevaReservaData.servicio) => {
         if (!servicioNombre) return null;
@@ -464,6 +524,21 @@ function AdminApp() {
 
         const servicioUnico = getServicioManual();
         return servicios.length > 0 ? servicios : (servicioUnico ? [servicioUnico] : []);
+    };
+
+    const getDuracionManualConfigurada = (serviciosSeleccionados = getServiciosManualSeleccionados()) => {
+        return serviciosSeleccionados.reduce((total, servicio) => total + Number(servicio.duracion || 60), 0);
+    };
+
+    const getDuracionManualTotal = (serviciosSeleccionados = getServiciosManualSeleccionados()) => {
+        const personalizada = parseInt(nuevaReservaData.duracion_personalizada, 10);
+        if (!Number.isNaN(personalizada) && personalizada > 0) return personalizada;
+        return getDuracionManualConfigurada(serviciosSeleccionados);
+    };
+
+    const tieneDuracionManualPersonalizada = () => {
+        const personalizada = parseInt(nuevaReservaData.duracion_personalizada, 10);
+        return !Number.isNaN(personalizada) && personalizada > 0;
     };
 
     const toggleServicioManual = (nombreServicio) => {
@@ -489,9 +564,18 @@ function AdminApp() {
         .replace(/\s+/g, ' ')
         .trim();
 
-    const limpiarTelefonoCliente = (valor) => String(valor || '')
-        .replace(/\D/g, '')
-        .replace(/^53(?=\d{8,}$)/, '');
+    const normalizarTelefonoLocalSeguro = (valor, codigoPais = codigoPaisClienteManual) => {
+        if (window.normalizarTelefonoLocal) return window.normalizarTelefonoLocal(valor, codigoPais);
+        return String(valor || '').replace(/\D/g, '');
+    };
+
+    const normalizarTelefonoCompletoSeguro = (valor, codigoPais = codigoPaisClienteManual) => {
+        if (window.normalizarTelefonoInternacional) return window.normalizarTelefonoInternacional(valor, codigoPais);
+        const local = normalizarTelefonoLocalSeguro(valor, codigoPais);
+        return local ? `53${local}` : '';
+    };
+
+    const limpiarTelefonoCliente = normalizarTelefonoLocalSeguro;
 
     const clientesManualFiltrados = React.useMemo(() => {
         const queryTexto = normalizarBusquedaCliente(busquedaClienteManual);
@@ -502,7 +586,7 @@ function AdminApp() {
             .filter(cliente => {
                 const nombreOriginal = String(cliente.nombre || '').toLowerCase().trim();
                 const nombreNormalizado = normalizarBusquedaCliente(cliente.nombre);
-                const whatsapp = String(cliente.whatsapp || '').replace(/\D/g, '');
+                const whatsapp = normalizarTelefonoLocalSeguro(cliente.whatsapp);
                 const textoCliente = normalizarBusquedaCliente(Object.values(cliente || {}).join(' '));
                 const coincideNombre =
                     nombreNormalizado.includes(queryTexto) ||
@@ -511,13 +595,14 @@ function AdminApp() {
                 const coincideTexto = queryTexto && textoCliente.includes(queryTexto);
                 return coincideNombre || coincideTelefono || coincideTexto;
             });
-    }, [busquedaClienteManual, clientesRegistrados]);
+    }, [busquedaClienteManual, clientesRegistrados, config?.codigo_pais]);
 
     const seleccionarClienteManual = (cliente) => {
         setNuevaReservaData(prev => ({
             ...prev,
             cliente_nombre: cliente.nombre || '',
-            cliente_whatsapp: limpiarTelefonoCliente(cliente.whatsapp)
+            cliente_whatsapp: limpiarTelefonoCliente(cliente.whatsapp),
+            cliente_codigo_pais: window.normalizarTelefonoInternacional ? '' : prev.cliente_codigo_pais
         }));
         setBusquedaClienteManual('');
     };
@@ -694,7 +779,7 @@ function AdminApp() {
         if (showNuevaReservaModal && nuevaReservaData.profesional_id) {
             cargarDisponibilidadMes(currentDate, nuevaReservaData.profesional_id);
         }
-    }, [showNuevaReservaModal, nuevaReservaData.servicio, nuevaReservaData.profesional_id, reservaEditando]);
+    }, [showNuevaReservaModal, nuevaReservaData.servicio, nuevaReservaData.profesional_id, nuevaReservaData.duracion_personalizada, reservaEditando]);
 
     const ordenarHorarios = (horarios = []) => Array.from(new Set(horarios)).sort((a, b) => {
         const [hA, mA] = a.split(':').map(Number);
@@ -703,19 +788,24 @@ function AdminApp() {
     });
 
     const calcularHorariosDisponiblesManual = async (fecha, profesionalId, serviciosSeleccionados) => {
-        if (!fecha || !profesionalId || serviciosSeleccionados.length === 0) return [];
-
-        const profesionalObj = profesionalesList.find(p => p.id === parseInt(profesionalId));
-        if (diasCerradosFechas.includes(fecha) || profesionalObj?.fechas_libres?.includes(fecha)) {
+        if (!fecha || !profesionalId || serviciosSeleccionados.length === 0) {
+            setModoHorarioManualCompleto(false);
             return [];
         }
 
-        const duracionTotal = reservaEditando
-            ? Number(serviciosSeleccionados[0]?.duracion || reservaEditando?.duracion || 60)
-            : serviciosSeleccionados.reduce((total, servicio) => total + Number(servicio.duracion || 60), 0);
+        const profesionalObj = profesionalesList.find(p => p.id === parseInt(profesionalId));
+        const adminPuedeForzarHorario = userRole === 'admin';
+        const fechaBloqueada = diasCerradosFechas.includes(fecha) || profesionalObj?.fechas_libres?.includes(fecha);
+        if (fechaBloqueada && !adminPuedeForzarHorario) {
+            setModoHorarioManualCompleto(false);
+            return [];
+        }
+
+        const duracionTotal = getDuracionManualTotal(serviciosSeleccionados);
         const configGlobal = window.salonConfig ? await window.salonConfig.get() : {};
         const minAntelacionHoras = configGlobal?.min_antelacion_horas ?? 2;
         const maxAntelacionDias = configGlobal?.max_antelacion_dias ?? 30;
+        const respetarLimitesAntelacion = userRole !== 'admin' && !reservaEditando;
 
         const horarios = await window.salonConfig.getHorariosProfesional(profesionalId);
         const [year, month, day] = fecha.split('-').map(Number);
@@ -725,16 +815,26 @@ function AdminApp() {
         const diasTrabajo = horarios.dias || [];
         let horasTrabajo = horarios.horariosPorDia?.[diaSemana] || horarios.horas || [];
         const descansosDelDia = horarios.descansosPorDia?.[diaSemana] || [];
+        const diaSinJornada = diasTrabajo.length > 0 && !diasTrabajo.includes(diaSemana);
+        const sinHorasConfiguradas = horasTrabajo.length === 0;
+        const usarHorarioManualCompleto = adminPuedeForzarHorario && (fechaBloqueada || diaSinJornada || sinHorasConfiguradas);
 
-        if (diasTrabajo.length > 0 && !diasTrabajo.includes(diaSemana)) return [];
-        if (horasTrabajo.length === 0) return [];
+        setModoHorarioManualCompleto(usarHorarioManualCompleto);
+
+        if (diaSinJornada && !usarHorarioManualCompleto) return [];
+        if (sinHorasConfiguradas && !usarHorarioManualCompleto) return [];
 
         const primerServicio = serviciosSeleccionados[0];
         let horasTrabajoFiltradas = horasTrabajo;
-        if (primerServicio?.horarios_permitidos?.length) {
+        if (!usarHorarioManualCompleto && primerServicio?.horarios_permitidos?.length) {
             horasTrabajoFiltradas = horasTrabajo.filter(indice => servicioPermiteHorario(primerServicio, indiceToHoraLegible(indice)));
         }
-        const slotsTrabajo = horasTrabajoFiltradas.map(indice => indiceToHoraLegible(indice));
+        const slotsTrabajo = usarHorarioManualCompleto
+            ? Array.from(
+                { length: Math.floor((24 * 60) / Math.max(15, Number(configGlobal?.intervalo_entre_turnos || 30))) },
+                (_, index) => minutesToHoraLegible(index * Math.max(15, Number(configGlobal?.intervalo_entre_turnos || 30)))
+            )
+            : horasTrabajoFiltradas.map(indice => indiceToHoraLegible(indice));
 
         const negocioId = typeof getNegocioId === "function" ? getNegocioId() : (window.getNegocioIdFromConfig ? window.getNegocioIdFromConfig() : localStorage.getItem("negocioId"));
         const response = await fetch(
@@ -754,7 +854,7 @@ function AdminApp() {
         const diffDias = Math.ceil((new Date(year, month - 1, day) - hoy) / (1000 * 60 * 60 * 24));
         const minFechaPermitida = new Date(Date.now() + (minAntelacionHoras * 60 * 60 * 1000));
 
-        if (!reservaEditando && Number(maxAntelacionDias) > 0 && diffDias > Number(maxAntelacionDias)) return [];
+        if (respetarLimitesAntelacion && Number(maxAntelacionDias) > 0 && diffDias > Number(maxAntelacionDias)) return [];
 
         const disponibles = slotsTrabajo.filter(slot => {
             const [horas, minutos] = slot.split(':').map(Number);
@@ -762,9 +862,10 @@ function AdminApp() {
             const slotEnd = slotStart + duracionTotal;
             const fechaHoraSlot = new Date(year, month - 1, day, horas, minutos, 0);
 
-            if (!reservaEditando && fechaHoraSlot < minFechaPermitida) return false;
+            if (usarHorarioManualCompleto && slotEnd > 24 * 60) return false;
+            if (respetarLimitesAntelacion && fechaHoraSlot < minFechaPermitida) return false;
 
-            if (slotTieneDescanso(slotStart, slotEnd, descansosDelDia)) {
+            if (!usarHorarioManualCompleto && slotTieneDescanso(slotStart, slotEnd, descansosDelDia)) {
                 return false;
             }
 
@@ -786,12 +887,16 @@ function AdminApp() {
         const cargarHorarios = async () => {
             if (!nuevaReservaData.profesional_id || !nuevaReservaData.fecha || !nuevaReservaData.servicio) {
                 setHorariosDisponibles([]);
+                setModoHorarioManualCompleto(false);
                 return;
             }
 
             try {
                 const serviciosSeleccionados = getServiciosManualSeleccionados();
-                if (serviciosSeleccionados.length === 0) return;
+                if (serviciosSeleccionados.length === 0) {
+                    setModoHorarioManualCompleto(false);
+                    return;
+                }
                 const disponibles = await calcularHorariosDisponiblesManual(
                     nuevaReservaData.fecha,
                     nuevaReservaData.profesional_id,
@@ -803,11 +908,12 @@ function AdminApp() {
             } catch (error) {
                 console.error('Error cargando horarios:', error);
                 setHorariosDisponibles([]);
+                setModoHorarioManualCompleto(false);
             }
         };
 
         cargarHorarios();
-    }, [nuevaReservaData.profesional_id, nuevaReservaData.fecha, nuevaReservaData.servicio, serviciosManualSeleccionados, serviciosList, reservaEditando]);
+    }, [nuevaReservaData.profesional_id, nuevaReservaData.fecha, nuevaReservaData.servicio, nuevaReservaData.duracion_personalizada, serviciosManualSeleccionados, serviciosList, reservaEditando]);
 
     // ============================================
     // FUNCIONES DE DISPONIBILIDAD
@@ -824,12 +930,11 @@ function AdminApp() {
                 setFechasConHorarios({});
                 return;
             }
-            const duracion = serviciosSeleccionados.length > 0
-                ? serviciosSeleccionados.reduce((total, servicio) => total + Number(servicio.duracion || 60), 0)
-                : (reservaEditando?.duracion || 60);
+            const duracion = getDuracionManualTotal(serviciosSeleccionados);
             const configGlobal = window.salonConfig ? await window.salonConfig.get() : {};
             const minAntelacionHoras = configGlobal?.min_antelacion_horas ?? 2;
             const maxAntelacionDias = configGlobal?.max_antelacion_dias ?? 30;
+            const respetarLimitesAntelacion = userRole !== 'admin' && !reservaEditando;
             
             const horarios = await window.salonConfig.getHorariosProfesional(profesionalId);
             const horasTrabajo = horarios.horas || [];
@@ -881,7 +986,7 @@ function AdminApp() {
                 const diaSemana = nombresDias[fechaActual.getDay()];
                 const diffDias = Math.ceil((fechaActual - hoy) / (1000 * 60 * 60 * 24));
 
-                if (!reservaEditando && Number(maxAntelacionDias) > 0 && diffDias > Number(maxAntelacionDias)) {
+                if (respetarLimitesAntelacion && Number(maxAntelacionDias) > 0 && diffDias > Number(maxAntelacionDias)) {
                     disponibilidad[fechaStr] = false;
                     conteosDisponibles[fechaStr] = 0;
                     continue;
@@ -919,7 +1024,7 @@ function AdminApp() {
                     const slotEnd = slotStart + duracion;
                     const fechaHoraSlot = new Date(year, month, d, Math.floor(slotStart / 60), slotStart % 60, 0);
 
-                    if (!reservaEditando && fechaHoraSlot < minFechaPermitida) {
+                    if (respetarLimitesAntelacion && fechaHoraSlot < minFechaPermitida) {
                         return false;
                     }
 
@@ -1225,12 +1330,16 @@ function AdminApp() {
         
         const fechaStr = formatDate(date);
         
-        if (diasCerradosFechas.includes(fechaStr)) {
-            return false;
-        }
-        
         const hoy = getCurrentLocalDate();
         if (fechaStr < hoy) {
+            return false;
+        }
+
+        if (userRole === 'admin') {
+            return true;
+        }
+
+        if (diasCerradosFechas.includes(fechaStr)) {
             return false;
         }
         
@@ -1321,6 +1430,61 @@ function AdminApp() {
     };
 
     const canvasToBlob = (canvas) => new Promise(resolve => canvas.toBlob(resolve, 'image/png', 0.95));
+
+    const blobToBase64 = (blob) => new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(String(reader.result || '').split(',')[1] || '');
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+    });
+
+    const compartirImagenDesdeCanvas = async (canvas, fileName, title, text) => {
+        const blob = await canvasToBlob(canvas);
+        if (!blob) return false;
+
+        const capacitor = window.Capacitor;
+        const plugins = capacitor?.Plugins || {};
+        const Filesystem = plugins.Filesystem;
+        const Share = plugins.Share;
+        const Directory = Filesystem?.Directory || window.Capacitor?.FilesystemDirectory;
+
+        if (Filesystem?.writeFile && Share?.share) {
+            try {
+                const data = await blobToBase64(blob);
+                const saved = await Filesystem.writeFile({
+                    path: fileName,
+                    data,
+                    directory: Directory?.Cache || 'CACHE',
+                    recursive: true
+                });
+                await Share.share({
+                    title,
+                    text,
+                    files: [saved.uri]
+                });
+                return true;
+            } catch (error) {
+                console.warn('No se pudo compartir con Capacitor, usando fallback:', error);
+            }
+        }
+
+        const file = new File([blob], fileName, { type: 'image/png' });
+        if (navigator.canShare && navigator.canShare({ files: [file] }) && navigator.share) {
+            await navigator.share({ title, text, files: [file] });
+            return true;
+        }
+
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = fileName;
+        link.target = '_blank';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
+        return false;
+    };
 
     const dibujarTextoCentrado = (ctx, texto, x, y, maxWidth, lineHeight) => {
         const palabras = String(texto || '').split(' ');
@@ -1476,29 +1640,13 @@ function AdminApp() {
         try {
             if (!disponibilidadSemanal.length) return;
             const canvas = await generarImagenDisponibilidadSemanal();
-            const blob = await canvasToBlob(canvas);
-            if (!blob) {
-                compartirDisponibilidadSemanalTexto();
-                return;
-            }
-
-            const file = new File([blob], `disponibilidad-${nombreNegocio || 'salon'}.png`, { type: 'image/png' });
-            if (navigator.canShare && navigator.canShare({ files: [file] }) && navigator.share) {
-                await navigator.share({
-                    title: `Disponibilidad semanal - ${nombreNegocio}`,
-                    text: `Disponibilidad semanal de ${nombreNegocio}`,
-                    files: [file]
-                });
-                return;
-            }
-
-            const url = URL.createObjectURL(blob);
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = file.name;
-            link.target = '_blank';
-            link.click();
-            setTimeout(() => URL.revokeObjectURL(url), 60000);
+            const compartido = await compartirImagenDesdeCanvas(
+                canvas,
+                `disponibilidad-${nombreNegocio || 'salon'}.png`,
+                `Disponibilidad semanal - ${nombreNegocio}`,
+                `Disponibilidad semanal de ${nombreNegocio}`
+            );
+            if (!compartido) alert('Imagen generada. Si no se abrio el menu de compartir, revisa Descargas.');
         } catch (error) {
             console.error('Error generando imagen de disponibilidad:', error);
             compartirDisponibilidadSemanalTexto();
@@ -1662,26 +1810,13 @@ function AdminApp() {
     const compartirDisponibilidadMensual = async () => {
         try {
             const canvas = await generarImagenDisponibilidadMensual();
-            const blob = await canvasToBlob(canvas);
-            if (!blob) return;
-
-            const file = new File([blob], `disponibilidad-mensual-${nombreNegocio || 'salon'}.png`, { type: 'image/png' });
-            if (navigator.canShare && navigator.canShare({ files: [file] }) && navigator.share) {
-                await navigator.share({
-                    title: `Disponibilidad mensual - ${nombreNegocio}`,
-                    text: `Disponibilidad mensual de ${nombreNegocio}`,
-                    files: [file]
-                });
-                return;
-            }
-
-            const url = URL.createObjectURL(blob);
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = file.name;
-            link.target = '_blank';
-            link.click();
-            setTimeout(() => URL.revokeObjectURL(url), 60000);
+            const compartido = await compartirImagenDesdeCanvas(
+                canvas,
+                `disponibilidad-mensual-${nombreNegocio || 'salon'}.png`,
+                `Disponibilidad mensual - ${nombreNegocio}`,
+                `Disponibilidad mensual de ${nombreNegocio}`
+            );
+            if (!compartido) alert('Imagen mensual generada. Si no se abrio el menu de compartir, revisa Descargas.');
         } catch (error) {
             console.error('Error generando imagen mensual:', error);
             alert('No se pudo generar la imagen mensual.');
@@ -1732,17 +1867,21 @@ function AdminApp() {
                 return;
             }
 
-            const servicio = reservaEditando ? serviciosSeleccionados[0] : null;
-            const duracionTotal = serviciosSeleccionados.reduce((total, item) => total + Number(item.duracion || 60), 0);
-            const endTime = calculateEndTime(nuevaReservaData.hora_inicio, reservaEditando ? servicio.duracion : duracionTotal);
+            const duracionTotal = getDuracionManualTotal(serviciosSeleccionados);
+            const usaDuracionPersonalizada = tieneDuracionManualPersonalizada();
+            if (duracionTotal <= 0) {
+                alert('La duracion de la cita debe ser mayor que 0 minutos.');
+                return;
+            }
+            const endTime = calculateEndTime(nuevaReservaData.hora_inicio, duracionTotal);
             const configNegocio = await window.cargarConfiguracionNegocio();
             const requiereAnticipo = nuevaReservaData.requiereAnticipo;
             
             const bookingData = {
                 cliente_nombre: nuevaReservaData.cliente_nombre,
-                cliente_whatsapp: `53${nuevaReservaData.cliente_whatsapp.replace(/\D/g, '').replace(/^53(?=\d{8,}$)/, '')}`,
+                cliente_whatsapp: normalizarTelefonoCompletoSeguro(nuevaReservaData.cliente_whatsapp),
                 servicio: nuevaReservaData.servicio,
-                duracion: reservaEditando ? servicio.duracion : duracionTotal,
+                duracion: duracionTotal,
                 profesional_id: nuevaReservaData.profesional_id,
                 profesional_nombre: profesional.nombre,
                 fecha: nuevaReservaData.fecha,
@@ -1783,6 +1922,16 @@ function AdminApp() {
                     const data = await response.json();
                     result = { success: true, data: Array.isArray(data) ? data[0] : data };
                 }
+            } else if (usaDuracionPersonalizada || serviciosSeleccionados.length === 1) {
+                const reservaServicio = {
+                    ...bookingData,
+                    servicio: bookingData.servicio,
+                    duracion: duracionTotal,
+                    hora_inicio: nuevaReservaData.hora_inicio,
+                    hora_fin: endTime
+                };
+
+                result = await createBooking(reservaServicio);
             } else {
                 const reservasCreadas = [];
                 let horaActual = nuevaReservaData.hora_inicio;
@@ -1864,10 +2013,12 @@ function AdminApp() {
                 setNuevaReservaData({
                     cliente_nombre: '',
                     cliente_whatsapp: '',
+                    cliente_codigo_pais: codigoPaisNegocio,
                     servicio: '',
                     profesional_id: userRole === 'profesional' ? profesional?.id : '',
                     fecha: '',
                     hora_inicio: '',
+                    duracion_personalizada: '',
                     requiereAnticipo: false
                 });
                 setServiciosManualSeleccionados([]);
@@ -1889,6 +2040,87 @@ function AdminApp() {
     // ============================================
     // FUNCIONES DE CLIENTES
     // ============================================
+
+    const parseCsvLine = (linea, separador = ',') => {
+        const valores = [];
+        let actual = '';
+        let entreComillas = false;
+        for (let i = 0; i < linea.length; i++) {
+            const char = linea[i];
+            const siguiente = linea[i + 1];
+            if (char === '"' && entreComillas && siguiente === '"') {
+                actual += '"';
+                i++;
+            } else if (char === '"') {
+                entreComillas = !entreComillas;
+            } else if (char === separador && !entreComillas) {
+                valores.push(actual.trim());
+                actual = '';
+            } else {
+                actual += char;
+            }
+        }
+        valores.push(actual.trim());
+        return valores;
+    };
+
+    const parseClientesCsv = (texto) => {
+        const lineas = String(texto || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+        if (lineas.length === 0) return [];
+
+        const separador = (lineas[0].match(/;/g) || []).length > (lineas[0].match(/,/g) || []).length ? ';' : ',';
+        const primera = parseCsvLine(lineas[0], separador).map(h => h.toLowerCase().replace(/\s+/g, '_'));
+        const tieneHeader = primera.some(h => ['nombre', 'name', 'whatsapp', 'telefono', 'phone', 'celular'].includes(h));
+        const headers = tieneHeader ? primera : ['nombre', 'whatsapp'];
+        const datos = tieneHeader ? lineas.slice(1) : lineas;
+
+        const idxNombre = Math.max(headers.indexOf('nombre'), headers.indexOf('name'));
+        const idxWhatsapp = ['whatsapp', 'telefono', 'phone', 'celular', 'numero'].map(h => headers.indexOf(h)).find(i => i >= 0);
+
+        return datos.map(linea => {
+            const valores = parseCsvLine(linea, separador);
+            const nombre = valores[idxNombre >= 0 ? idxNombre : 0] || '';
+            const whatsapp = valores[idxWhatsapp >= 0 ? idxWhatsapp : 1] || '';
+            return { nombre: nombre.trim(), whatsapp: whatsapp.trim() };
+        }).filter(cliente => cliente.nombre && cliente.whatsapp);
+    };
+
+    const handleImportarClientesCsv = async (event) => {
+        const file = event.target.files?.[0];
+        event.target.value = '';
+        if (!file) return;
+        if (!puedeGestionarReservas && userRole !== 'admin' && userNivel < 3) {
+            alert('No tienes permiso para importar clientes.');
+            return;
+        }
+
+        setImportandoClientesCsv(true);
+        try {
+            const texto = await file.text();
+            const clientes = parseClientesCsv(texto);
+            if (clientes.length === 0) {
+                alert('No se encontraron clientes validos. Usa columnas nombre,whatsapp.');
+                return;
+            }
+
+            let creados = 0;
+            let fallidos = 0;
+            for (const cliente of clientes) {
+                const whatsapp = normalizarTelefonoCompletoSeguro(cliente.whatsapp);
+                const creado = await window.crearCliente?.(cliente.nombre, whatsapp);
+                if (creado) creados++;
+                else fallidos++;
+            }
+
+            await loadClientesRegistrados();
+            alert(`CSV procesado. Clientes creados/actualizados: ${creados}. Fallidos: ${fallidos}.`);
+        } catch (error) {
+            console.error('Error importando CSV de clientes:', error);
+            alert('No se pudo importar el CSV. Revisa el formato.');
+        } finally {
+            setImportandoClientesCsv(false);
+        }
+    };
     
     const loadClientesRegistrados = async () => {
         console.log('Cargando clientes registrados...');
@@ -1936,7 +2168,7 @@ function AdminApp() {
             return;
         }
         const nombre = cliente?.nombre || nuevoBloqueo.nombre;
-        const whatsapp = cliente?.whatsapp || nuevoBloqueo.whatsapp;
+        const whatsapp = cliente?.whatsapp || normalizarTelefonoCompletoSeguro(nuevoBloqueo.whatsapp, nuevoBloqueo.codigo_pais || codigoPaisNegocio);
         const motivo = cliente ? prompt('Motivo del bloqueo (opcional):', '') : nuevoBloqueo.motivo;
 
         if (!whatsapp) {
@@ -1948,7 +2180,7 @@ function AdminApp() {
 
         const ok = await window.bloquearCliente?.({ nombre, whatsapp, motivo });
         if (ok) {
-            setNuevoBloqueo({ nombre: '', whatsapp: '', motivo: '' });
+            setNuevoBloqueo({ nombre: '', whatsapp: '', codigo_pais: codigoPaisNegocio, motivo: '' });
             await loadClientesRegistrados();
             await loadClientesBloqueados();
             alert('Cliente bloqueado. Ya no podrá registrarse ni reservar.');
@@ -2009,6 +2241,8 @@ function AdminApp() {
                 data = await window.getReservasPorProfesional?.(profesional.id, false) || [];
             } else {
                 console.log('Llamando getAllBookings...');
+                const configActual = config || (window.cargarConfiguracionNegocio ? await window.cargarConfiguracionNegocio(true) : {});
+                await deleteExpiredPendingBookings(configActual);
                 data = await getAllBookings();
             }
             
@@ -2453,7 +2687,7 @@ Cualquier cambio, podés cancelarlo desde la app con hasta 1 hora de anticipaci�
 
             let todoOk = true;
             for (const reserva of reservasGrupo) {
-                const ok = await cancelBooking(reserva.id);
+                const ok = await cancelBooking(reserva.id, reserva);
                 if (!ok) todoOk = false;
             }
 
@@ -2476,7 +2710,7 @@ Cualquier cambio, podés cancelarlo desde la app con hasta 1 hora de anticipaci�
 
         if (!confirm(`¿Cancelar reserva de ${bookingData.cliente_nombre}?`)) return;
         
-        const ok = await cancelBooking(id);
+        const ok = await cancelBooking(id, bookingData);
         if (ok) {
             console.log('📱 Enviando notificaciones de cancelación por admin...');
             
@@ -2583,7 +2817,7 @@ Cualquier cambio, podés cancelarlo desde la app con hasta 1 hora de anticipaci�
     };
 
     const agruparReservasVisuales = (reservas) => {
-        const normalizarTelefonoLocal = (phone) => String(phone || '').replace(/\D/g, '').replace(/^53/, '');
+        const normalizarTelefonoLocal = normalizarTelefonoLocalSeguro;
         const ordenadas = [...reservas].sort((a, b) =>
             String(a.fecha || '').localeCompare(String(b.fecha || '')) ||
             String(a.cliente_whatsapp || '').localeCompare(String(b.cliente_whatsapp || '')) ||
@@ -2648,10 +2882,11 @@ Cualquier cambio, podés cancelarlo desde la app con hasta 1 hora de anticipaci�
     const agendaPxPerMinute = 1.2;
     const agendaGridHeight = 14 * 60 * agendaPxPerMinute;
     const agendaStatusStyle = {
-        Reservado: 'bg-pink-500 border-pink-600 text-white',
-        Pendiente: 'bg-amber-400 border-amber-500 text-amber-950',
-        Completado: 'bg-emerald-500 border-emerald-600 text-white',
-        Ausente: 'bg-slate-500 border-slate-600 text-white'
+        Reservado: 'bg-cyan-50 border-l-cyan-600 border-cyan-100 text-slate-900',
+        Pendiente: 'bg-amber-50 border-l-amber-500 border-amber-100 text-amber-950',
+        Completado: 'bg-emerald-50 border-l-emerald-600 border-emerald-100 text-emerald-950',
+        Ausente: 'bg-slate-100 border-l-slate-500 border-slate-200 text-slate-800',
+        Cancelado: 'bg-red-50 border-l-red-500 border-red-100 text-red-900'
     };
     const estadoNormalizado = (estado) => String(estado || '').trim().toLowerCase();
     const puedeEditarReserva = (booking) => {
@@ -2754,7 +2989,7 @@ Cualquier cambio, podés cancelarlo desde la app con hasta 1 hora de anticipaci�
     const agendaDayMaxColumns = Math.max(1, ...agendaDayLayoutBookings.map(b => b._agendaColumns || 1));
     const agendaDayMinWidth = Math.max(0, 72 + (agendaDayMaxColumns * 180));
 
-    const normalizePhone = (phone) => String(phone || '').replace(/\D/g, '').replace(/^53/, '');
+    const normalizePhone = normalizarTelefonoLocalSeguro;
 
     const getClienteScore = (cliente) => {
         const phone = normalizePhone(cliente.whatsapp);
@@ -2808,12 +3043,420 @@ Cualquier cambio, podés cancelarlo desde la app con hasta 1 hora de anticipaci�
         return `${agendaDays[0].toLocaleDateString('es-CU', { day: 'numeric', month: 'short' })} - ${agendaDays[6].toLocaleDateString('es-CU', { day: 'numeric', month: 'short', year: 'numeric' })}`;
     };
 
+    const getAgendaServicios = (booking) => {
+        const reservasGrupo = booking?._reservasGrupo || [];
+        return reservasGrupo.length > 0 ? reservasGrupo : [booking].filter(Boolean);
+    };
+
+    const getPrecioServicioAgenda = (nombreServicio) => {
+        const servicio = serviciosList.find(item => item.nombre === nombreServicio);
+        return Number(servicio?.precio || 0);
+    };
+
+    const getAgendaResumenCobro = (booking) => {
+        const reservas = getAgendaServicios(booking);
+        const costoServicios = reservas.reduce((total, reserva) => total + getPrecioServicioAgenda(reserva.servicio), 0);
+        const cobroReal = reservas.reduce((total, reserva) => total + Number(reserva.monto_cobrado || 0), 0);
+        const requiereAnticipo = config?.requiere_anticipo === true || booking?.estado === 'Pendiente' || booking?.requiere_anticipo || booking?.requiereAnticipo || booking?.anticipo_recibido;
+        const valorAnticipo = Number(config?.valor_anticipo ?? config?.monto_anticipo ?? 0);
+        const anticipoCalculado = config?.tipo_anticipo === 'porcentaje'
+            ? Math.round(costoServicios * (valorAnticipo / 100))
+            : valorAnticipo;
+        const anticipo = requiereAnticipo ? anticipoCalculado : 0;
+        const totalMostrar = cobroReal > 0 ? cobroReal : costoServicios;
+        return {
+            costoServicios,
+            cobroReal,
+            anticipo,
+            requiereAnticipo,
+            tipoAnticipo: config?.tipo_anticipo || 'fijo',
+            valorAnticipo,
+            totalMostrar,
+            pendiente: Math.max(0, totalMostrar - anticipo)
+        };
+    };
+
+    const getAgendaEstadoPago = (booking) => {
+        const resumen = getAgendaResumenCobro(booking);
+        if (booking?.estado === 'Pendiente') return 'Anticipo pendiente';
+        if (resumen.requiereAnticipo) return `Anticipo requerido ${formatMoneyEstadistica(resumen.anticipo)}`;
+        return 'Sin anticipo';
+    };
+
+    const parseMontoEstadistica = (value) => {
+        const normalized = String(value || '0').replace(',', '.').replace(/[^\d.-]/g, '');
+        const monto = Number(normalized);
+        return Number.isFinite(monto) ? monto : 0;
+    };
+
+    const formatMoneyEstadistica = (value) => {
+        const monto = Number(value || 0);
+        return `$${monto.toLocaleString('es-CU', { maximumFractionDigits: 0 })}`;
+    };
+
+    const getDateFromInput = (value) => {
+        const [year, month, day] = String(value || getCurrentLocalDate()).split('-').map(Number);
+        return new Date(year || new Date().getFullYear(), (month || 1) - 1, day || 1);
+    };
+
+    const getServicioPrecioEstadistica = (nombreServicio) => {
+        return String(nombreServicio || '')
+            .split(' + ')
+            .map(nombre => nombre.trim())
+            .filter(Boolean)
+            .reduce((total, nombre) => {
+                const servicio = serviciosList.find(item => item.nombre === nombre);
+                return total + parseMontoEstadistica(servicio?.precio);
+            }, 0);
+    };
+
+    const getRangoEstadisticas = () => {
+        const base = getDateFromInput(estadisticasFecha);
+        let inicio = new Date(base);
+        let fin = new Date(base);
+        let titulo = '';
+
+        if (estadisticasPeriodo === 'semana') {
+            inicio = startOfWeek(base);
+            fin = addDays(inicio, 6);
+            titulo = `${inicio.toLocaleDateString('es-CU', { day: 'numeric', month: 'short' })} - ${fin.toLocaleDateString('es-CU', { day: 'numeric', month: 'short', year: 'numeric' })}`;
+        } else if (estadisticasPeriodo === 'ano') {
+            inicio = new Date(base.getFullYear(), 0, 1);
+            fin = new Date(base.getFullYear(), 11, 31);
+            titulo = `${base.getFullYear()}`;
+        } else {
+            inicio = new Date(base.getFullYear(), base.getMonth(), 1);
+            fin = new Date(base.getFullYear(), base.getMonth() + 1, 0);
+            titulo = base.toLocaleDateString('es-CU', { month: 'long', year: 'numeric' });
+        }
+
+        return {
+            inicio: formatDate(inicio),
+            fin: formatDate(fin),
+            titulo
+        };
+    };
+
+    const topEstadistica = (mapa, campo = 'total', limite = 5) => {
+        return Object.values(mapa)
+            .sort((a, b) => Number(b[campo] || 0) - Number(a[campo] || 0))
+            .slice(0, limite);
+    };
+
+    const calcularEstadisticas = () => {
+        const rango = getRangoEstadisticas();
+        const reservasPeriodo = bookings.filter(b => b.fecha >= rango.inicio && b.fecha <= rango.fin);
+        const citasVisuales = agruparReservasVisuales(reservasPeriodo);
+        const estados = {
+            Reservado: 0,
+            Pendiente: 0,
+            Completado: 0,
+            Cancelado: 0,
+            Ausente: 0
+        };
+        const porProfesional = {};
+        const porServicio = {};
+        const porDia = {};
+
+        citasVisuales.forEach(cita => {
+            const estado = estados[cita.estado] !== undefined ? cita.estado : 'Reservado';
+            estados[estado] += 1;
+        });
+
+        reservasPeriodo.forEach(reserva => {
+            const estado = estados[reserva.estado] !== undefined ? reserva.estado : 'Reservado';
+            const cobro = parseMontoEstadistica(reserva.monto_cobrado);
+            const estimado = getServicioPrecioEstadistica(reserva.servicio);
+            const profesionalNombre = reserva.profesional_nombre || reserva.trabajador_nombre || 'Sin profesional';
+            const servicioNombre = reserva.servicio || 'Sin servicio';
+            const diaKey = reserva.fecha || 'Sin fecha';
+            const diaLabel = reserva.fecha
+                ? getDateFromInput(reserva.fecha).toLocaleDateString('es-CU', { weekday: 'short', day: 'numeric', month: 'short' })
+                : 'Sin fecha';
+
+            if (!porProfesional[profesionalNombre]) {
+                porProfesional[profesionalNombre] = { nombre: profesionalNombre, total: 0, completadas: 0, canceladas: 0, ausentes: 0, cobro: 0 };
+            }
+            porProfesional[profesionalNombre].total += 1;
+            porProfesional[profesionalNombre].cobro += cobro;
+            if (estado === 'Completado') porProfesional[profesionalNombre].completadas += 1;
+            if (estado === 'Cancelado') porProfesional[profesionalNombre].canceladas += 1;
+            if (estado === 'Ausente') porProfesional[profesionalNombre].ausentes += 1;
+
+            if (!porServicio[servicioNombre]) {
+                porServicio[servicioNombre] = { nombre: servicioNombre, total: 0, completadas: 0, canceladas: 0, cobro: 0, estimado: 0 };
+            }
+            porServicio[servicioNombre].total += 1;
+            porServicio[servicioNombre].cobro += cobro;
+            porServicio[servicioNombre].estimado += estimado;
+            if (estado === 'Completado') porServicio[servicioNombre].completadas += 1;
+            if (estado === 'Cancelado') porServicio[servicioNombre].canceladas += 1;
+
+            if (!porDia[diaKey]) {
+                porDia[diaKey] = { fecha: diaKey, label: diaLabel, total: 0, completadas: 0, canceladas: 0, pendientes: 0, ausentes: 0, cobro: 0 };
+            }
+            porDia[diaKey].total += 1;
+            porDia[diaKey].cobro += cobro;
+            if (estado === 'Completado') porDia[diaKey].completadas += 1;
+            if (estado === 'Cancelado') porDia[diaKey].canceladas += 1;
+            if (estado === 'Pendiente') porDia[diaKey].pendientes += 1;
+            if (estado === 'Ausente') porDia[diaKey].ausentes += 1;
+        });
+
+        const cobroReal = reservasPeriodo.reduce((total, reserva) => total + parseMontoEstadistica(reserva.monto_cobrado), 0);
+        const ingresoEstimado = reservasPeriodo
+            .filter(reserva => reserva.estado !== 'Cancelado' && reserva.estado !== 'Ausente')
+            .reduce((total, reserva) => total + getServicioPrecioEstadistica(reserva.servicio), 0);
+        const citasCompletadas = citasVisuales.filter(cita => cita.estado === 'Completado');
+        const citasSinCobro = citasCompletadas.filter(cita => parseMontoEstadistica(cita.monto_cobrado) <= 0).length;
+        const ticketPromedio = estados.Completado > 0 ? cobroReal / estados.Completado : 0;
+        const totalCitas = citasVisuales.length;
+
+        return {
+            rango,
+            reservasPeriodo,
+            citasVisuales,
+            estados,
+            totalCitas,
+            totalServicios: reservasPeriodo.length,
+            cobroReal,
+            ingresoEstimado,
+            diferenciaCobro: cobroReal - ingresoEstimado,
+            ticketPromedio,
+            citasSinCobro,
+            tasaCompletadas: totalCitas ? Math.round((estados.Completado / totalCitas) * 100) : 0,
+            tasaCanceladas: totalCitas ? Math.round((estados.Cancelado / totalCitas) * 100) : 0,
+            tasaAusentes: totalCitas ? Math.round((estados.Ausente / totalCitas) * 100) : 0,
+            topProfesionales: topEstadistica(porProfesional, 'cobro'),
+            topServicios: topEstadistica(porServicio, 'total'),
+            dias: Object.values(porDia).sort((a, b) => String(a.fecha).localeCompare(String(b.fecha)))
+        };
+    };
+
+    const crearResumenEstadisticasTexto = (stats) => {
+        const lineas = [
+            `Resumen de ${nombreNegocio}`,
+            `Periodo: ${stats.rango.titulo}`,
+            '',
+            `Cobro real: ${formatMoneyEstadistica(stats.cobroReal)}`,
+            `Ingreso estimado: ${formatMoneyEstadistica(stats.ingresoEstimado)}`,
+            `Ticket promedio: ${formatMoneyEstadistica(stats.ticketPromedio)}`,
+            '',
+            `Citas: ${stats.totalCitas}`,
+            `Completadas: ${stats.estados.Completado}`,
+            `Reservadas: ${stats.estados.Reservado}`,
+            `Pendientes: ${stats.estados.Pendiente}`,
+            `Canceladas: ${stats.estados.Cancelado}`,
+            `Ausentes: ${stats.estados.Ausente}`,
+            `Sin cobro registrado: ${stats.citasSinCobro}`
+        ];
+
+        if (stats.topProfesionales.length) {
+            lineas.push('', 'Profesionales destacados:');
+            stats.topProfesionales.slice(0, 3).forEach(item => {
+                lineas.push(`- ${item.nombre}: ${formatMoneyEstadistica(item.cobro)} / ${item.completadas} completadas`);
+            });
+        }
+
+        if (stats.topServicios.length) {
+            lineas.push('', 'Servicios mas pedidos:');
+            stats.topServicios.slice(0, 3).forEach(item => {
+                lineas.push(`- ${item.nombre}: ${item.total}`);
+            });
+        }
+
+        return lineas.join('\n');
+    };
+
+    const copiarResumenEstadisticas = async () => {
+        const texto = crearResumenEstadisticasTexto(calcularEstadisticas());
+        try {
+            if (navigator.clipboard?.writeText) {
+                await navigator.clipboard.writeText(texto);
+                alert('Resumen copiado');
+            } else {
+                window.prompt('Copia el resumen:', texto);
+            }
+        } catch (error) {
+            console.error('Error copiando resumen:', error);
+            window.prompt('Copia el resumen:', texto);
+        }
+    };
+
+    const descargarEstadisticasCSV = () => {
+        const stats = calcularEstadisticas();
+        const escapeCsv = (value) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+        const filas = [
+            ['Fecha', 'Total servicios', 'Completadas', 'Canceladas', 'Pendientes', 'Ausentes', 'Cobro real'],
+            ...stats.dias.map(dia => [dia.fecha, dia.total, dia.completadas, dia.canceladas, dia.pendientes, dia.ausentes, dia.cobro])
+        ];
+        const csv = filas.map(fila => fila.map(escapeCsv).join(',')).join('\n');
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `estadisticas-${estadisticasPeriodo}-${stats.rango.inicio}-${stats.rango.fin}.csv`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+    };
+
+    const renderEstadisticas = () => {
+        const stats = calcularEstadisticas();
+        const cards = [
+            { label: 'Cobro real', value: formatMoneyEstadistica(stats.cobroReal), tone: 'text-emerald-700 bg-emerald-50 border-emerald-100' },
+            { label: 'Ingreso estimado', value: formatMoneyEstadistica(stats.ingresoEstimado), tone: 'text-pink-700 bg-pink-50 border-pink-100' },
+            { label: 'Completadas', value: stats.estados.Completado, tone: 'text-blue-700 bg-blue-50 border-blue-100' },
+            { label: 'Canceladas', value: stats.estados.Cancelado, tone: 'text-red-700 bg-red-50 border-red-100' },
+            { label: 'Ausentes', value: stats.estados.Ausente, tone: 'text-slate-700 bg-slate-50 border-slate-100' },
+            { label: 'Sin cobro', value: stats.citasSinCobro, tone: 'text-amber-700 bg-amber-50 border-amber-100' }
+        ];
+
+        return (
+            <div className="space-y-4">
+                <div className="bg-white rounded-xl shadow-sm p-5 border border-gray-100">
+                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                        <div>
+                            <p className="text-xs uppercase tracking-wide text-pink-500 font-bold">Estadisticas</p>
+                            <h2 className="text-2xl font-bold text-gray-900">{stats.rango.titulo}</h2>
+                            <p className="text-sm text-gray-500">Desde {stats.rango.inicio} hasta {stats.rango.fin}</p>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2">
+                            <div className="inline-flex bg-gray-100 rounded-lg p-1">
+                                {[
+                                    ['semana', 'Semana'],
+                                    ['mes', 'Mes'],
+                                    ['ano', 'Ano']
+                                ].map(([id, label]) => (
+                                    <button key={id} onClick={() => setEstadisticasPeriodo(id)} className={`px-3 py-1.5 rounded-md text-sm font-medium ${estadisticasPeriodo === id ? 'bg-white text-pink-600 shadow-sm' : 'text-gray-600'}`}>
+                                        {label}
+                                    </button>
+                                ))}
+                            </div>
+                            <input type="date" value={estadisticasFecha} onChange={(e) => setEstadisticasFecha(e.target.value)} className="border rounded-lg px-3 py-2 text-sm bg-white" />
+                            <button onClick={copiarResumenEstadisticas} className="px-3 py-2 rounded-lg bg-pink-500 text-white text-sm font-bold hover:bg-pink-600">Copiar resumen</button>
+                            <button onClick={descargarEstadisticasCSV} className="px-3 py-2 rounded-lg bg-gray-900 text-white text-sm font-bold hover:bg-black">CSV</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
+                    {cards.map(card => (
+                        <div key={card.label} className={`rounded-xl border p-4 ${card.tone}`}>
+                            <p className="text-xs font-semibold uppercase">{card.label}</p>
+                            <p className="text-2xl font-black mt-1">{card.value}</p>
+                        </div>
+                    ))}
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                    <div className="bg-white rounded-xl shadow-sm p-5 border border-gray-100">
+                        <h3 className="font-bold text-gray-900 mb-4">Resumen de citas</h3>
+                        <div className="space-y-3">
+                            {[
+                                ['Total citas', stats.totalCitas],
+                                ['Servicios vendidos/reservados', stats.totalServicios],
+                                ['Reservadas', stats.estados.Reservado],
+                                ['Pendientes', stats.estados.Pendiente],
+                                ['Completadas', `${stats.estados.Completado} (${stats.tasaCompletadas}%)`],
+                                ['Canceladas', `${stats.estados.Cancelado} (${stats.tasaCanceladas}%)`],
+                                ['Ausentes', `${stats.estados.Ausente} (${stats.tasaAusentes}%)`],
+                                ['Ticket promedio real', formatMoneyEstadistica(stats.ticketPromedio)]
+                            ].map(([label, value]) => (
+                                <div key={label} className="flex justify-between gap-3 text-sm border-b border-gray-100 pb-2 last:border-b-0">
+                                    <span className="text-gray-500">{label}</span>
+                                    <span className="font-bold text-gray-900">{value}</span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className="bg-white rounded-xl shadow-sm p-5 border border-gray-100">
+                        <h3 className="font-bold text-gray-900 mb-4">Profesionales</h3>
+                        <div className="space-y-3">
+                            {stats.topProfesionales.length === 0 ? <p className="text-sm text-gray-500">No hay datos en este periodo.</p> : stats.topProfesionales.map(item => (
+                                <div key={item.nombre} className="rounded-lg bg-gray-50 border border-gray-100 p-3">
+                                    <div className="flex justify-between gap-3">
+                                        <p className="font-bold text-gray-900 truncate">{item.nombre}</p>
+                                        <p className="font-bold text-emerald-700">{formatMoneyEstadistica(item.cobro)}</p>
+                                    </div>
+                                    <p className="text-xs text-gray-500 mt-1">{item.completadas} completadas - {item.canceladas} canceladas - {item.ausentes} ausentes</p>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className="bg-white rounded-xl shadow-sm p-5 border border-gray-100">
+                        <h3 className="font-bold text-gray-900 mb-4">Servicios mas pedidos</h3>
+                        <div className="space-y-3">
+                            {stats.topServicios.length === 0 ? <p className="text-sm text-gray-500">No hay datos en este periodo.</p> : stats.topServicios.map(item => (
+                                <div key={item.nombre} className="rounded-lg bg-gray-50 border border-gray-100 p-3">
+                                    <div className="flex justify-between gap-3">
+                                        <p className="font-bold text-gray-900 truncate">{item.nombre}</p>
+                                        <p className="font-bold text-gray-900">{item.total}</p>
+                                    </div>
+                                    <p className="text-xs text-gray-500 mt-1">{item.completadas} completadas - {formatMoneyEstadistica(item.cobro)} real</p>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+
+                <div className="bg-white rounded-xl shadow-sm p-5 border border-gray-100">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
+                        <h3 className="font-bold text-gray-900">Detalle por dia</h3>
+                        <p className="text-sm text-gray-500">{stats.dias.length} dias con movimiento</p>
+                    </div>
+                    {stats.dias.length === 0 ? (
+                        <p className="text-sm text-gray-500">No hay reservas en este periodo.</p>
+                    ) : (
+                        <div className="overflow-x-auto">
+                            <table className="min-w-full text-sm">
+                                <thead>
+                                    <tr className="text-left text-gray-500 border-b">
+                                        <th className="py-2 pr-3">Dia</th>
+                                        <th className="py-2 pr-3">Total</th>
+                                        <th className="py-2 pr-3">Completadas</th>
+                                        <th className="py-2 pr-3">Pendientes</th>
+                                        <th className="py-2 pr-3">Canceladas</th>
+                                        <th className="py-2 pr-3">Ausentes</th>
+                                        <th className="py-2 pr-3">Cobro real</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {stats.dias.map(dia => (
+                                        <tr key={dia.fecha} className="border-b last:border-b-0">
+                                            <td className="py-2 pr-3 font-medium text-gray-900">{dia.label}</td>
+                                            <td className="py-2 pr-3">{dia.total}</td>
+                                            <td className="py-2 pr-3 text-emerald-700 font-semibold">{dia.completadas}</td>
+                                            <td className="py-2 pr-3 text-amber-700 font-semibold">{dia.pendientes}</td>
+                                            <td className="py-2 pr-3 text-red-700 font-semibold">{dia.canceladas}</td>
+                                            <td className="py-2 pr-3 text-slate-700 font-semibold">{dia.ausentes}</td>
+                                            <td className="py-2 pr-3 font-bold">{formatMoneyEstadistica(dia.cobro)}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                </div>
+            </div>
+        );
+    };
+
     const getTabsDisponibles = () => {
         const tabs = [];
+        const puedeVerEstadisticas = userRole === 'admin' || (userRole === 'profesional' && userNivel >= 2);
         tabs.push({ id: 'reservas', icono: '📅', label: userRole === 'profesional' ? 'Mis Reservas' : 'Reservas' });
         
         tabs.push({ id: 'agenda', icono: '📋', label: 'Agenda' });
 
+
+        if (puedeVerEstadisticas) {
+            tabs.push({ id: 'estadisticas', icono: 'Stats', label: 'Estadisticas' });
+        }
         if (userRole === 'admin' || (userRole === 'profesional' && userNivel >= 2)) {
             tabs.push({ id: 'configuracion', icono: '⚙️', label: 'Configuración' });
             tabs.push({ id: 'clientes', icono: '👥', label: 'Clientes' });
@@ -2836,10 +3479,12 @@ Cualquier cambio, podés cancelarlo desde la app con hasta 1 hora de anticipaci�
         setNuevaReservaData({
             cliente_nombre: '',
             cliente_whatsapp: '',
+            cliente_codigo_pais: codigoPaisNegocio,
             servicio: '',
             profesional_id: userRole === 'profesional' ? profesional?.id : '',
             fecha: '',
             hora_inicio: '',
+            duracion_personalizada: '',
             requiereAnticipo: false
         });
         setCurrentDate(new Date());
@@ -2865,11 +3510,13 @@ Cualquier cambio, podés cancelarlo desde la app con hasta 1 hora de anticipaci�
         setReservaEditando(booking);
         setNuevaReservaData({
             cliente_nombre: booking.cliente_nombre || '',
-            cliente_whatsapp: String(booking.cliente_whatsapp || '').replace(/^53/, '').replace(/\D/g, ''),
+            cliente_whatsapp: normalizarTelefonoLocalSeguro(booking.cliente_whatsapp),
+            cliente_codigo_pais: '',
             servicio: booking.servicio || '',
             profesional_id: booking.profesional_id || '',
             fecha: booking.fecha || '',
             hora_inicio: booking.hora_inicio || '',
+            duracion_personalizada: booking.duracion ? String(booking.duracion) : '',
             requiereAnticipo: booking.estado === 'Pendiente'
         });
         setCurrentDate(booking.fecha ? new Date(`${booking.fecha}T00:00:00`) : new Date());
@@ -3068,8 +3715,23 @@ Cualquier cambio, podés cancelarlo desde la app con hasta 1 hora de anticipaci�
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1">WhatsApp del Cliente *</label>
                                     <div className="flex">
-                                        <span className="inline-flex items-center px-3 rounded-l-lg border border-r-0 border-gray-300 bg-gray-50">+53</span>
-                                        <input type="tel" value={nuevaReservaData.cliente_whatsapp} onChange={(e) => setNuevaReservaData({...nuevaReservaData, cliente_whatsapp: e.target.value.replace(/\D/g, '')})} className="w-full px-4 py-2 rounded-r-lg border border-gray-300" placeholder="55002272" />
+                                        <select
+                                            value={codigoPaisClienteManual}
+                                            onChange={(e) => {
+                                                const nuevoCodigo = e.target.value;
+                                                setNuevaReservaData({
+                                                    ...nuevaReservaData,
+                                                    cliente_codigo_pais: nuevoCodigo,
+                                                    cliente_whatsapp: normalizarTelefonoLocalSeguro(nuevaReservaData.cliente_whatsapp, nuevoCodigo)
+                                                });
+                                            }}
+                                            className="w-32 px-2 rounded-l-lg border border-r-0 border-gray-300 bg-gray-50 text-sm"
+                                        >
+                                            {paisesTelefono.map((pais) => (
+                                                <option key={pais.id} value={pais.codigo}>{pais.bandera} +{pais.codigo}</option>
+                                            ))}
+                                        </select>
+                                        <input type="tel" value={nuevaReservaData.cliente_whatsapp} onChange={(e) => setNuevaReservaData({...nuevaReservaData, cliente_whatsapp: normalizarTelefonoLocalSeguro(e.target.value, codigoPaisClienteManual)})} className="w-full px-4 py-2 rounded-r-lg border border-gray-300" placeholder={paisTelefono.ejemplo || '55002272'} />
                                     </div>
                                 </div>
                                 <div>
@@ -3115,10 +3777,37 @@ Cualquier cambio, podés cancelarlo desde la app con hasta 1 hora de anticipaci�
                                     )}
                                     {!reservaEditando && serviciosManualSeleccionados.length > 0 && (
                                         <p className="text-xs text-pink-600 mt-2">
-                                            {serviciosManualSeleccionados.length} servicio{serviciosManualSeleccionados.length === 1 ? '' : 's'} · {getServiciosManualSeleccionados().reduce((total, s) => total + Number(s.duracion || 60), 0)} min
+                                            {serviciosManualSeleccionados.length} servicio{serviciosManualSeleccionados.length === 1 ? '' : 's'} - {getServiciosManualSeleccionados().reduce((total, s) => total + Number(s.duracion || 60), 0)} min
                                         </p>
                                     )}
                                 </div>
+                                {userRole === 'admin' && nuevaReservaData.servicio && (
+                                    <div className="rounded-xl border border-pink-100 bg-pink-50 p-3">
+                                        <label className="block text-sm font-medium text-pink-800 mb-1">Duracion para esta cita (min)</label>
+                                        <input
+                                            type="number"
+                                            min="5"
+                                            step="5"
+                                            value={nuevaReservaData.duracion_personalizada}
+                                            onChange={(e) => setNuevaReservaData({
+                                                ...nuevaReservaData,
+                                                duracion_personalizada: e.target.value.replace(/\D/g, ''),
+                                                fecha: '',
+                                                hora_inicio: ''
+                                            })}
+                                            className="w-full border border-pink-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-pink-300 focus:border-pink-400"
+                                            placeholder={`Usar ${getDuracionManualConfigurada(getServiciosManualSeleccionados())} min`}
+                                        />
+                                        <p className="text-xs text-pink-700 mt-1">
+                                            Dejalo vacio para usar la duracion configurada. Si escribes un tiempo, solo aplica a esta cita.
+                                        </p>
+                                        {tieneDuracionManualPersonalizada() && (
+                                            <p className="text-xs font-semibold text-pink-800 mt-1">
+                                                Esta reserva se calculara con {getDuracionManualTotal(getServiciosManualSeleccionados())} min.
+                                            </p>
+                                        )}
+                                    </div>
+                                )}
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1">Profesional *</label>
                                     <select value={nuevaReservaData.profesional_id} onChange={(e) => setNuevaReservaData({...nuevaReservaData, profesional_id: e.target.value})} className="w-full border rounded-lg px-3 py-2">
@@ -3156,14 +3845,17 @@ Cualquier cambio, podés cancelarlo desde la app con hasta 1 hora de anticipaci�
                                                         const selected = nuevaReservaData.fecha === fechaStr;
                                                         const esCerrado = diasCerradosFechas.includes(fechaStr);
                                                         const esPasado = fechaStr < getCurrentLocalDate();
+                                                        const adminPuedeForzarFecha = userRole === 'admin';
+                                                        const fechaDeshabilitada = esPasado || (!adminPuedeForzarFecha && (!available || esCerrado));
                                                         
                                                         let className = "h-10 w-full rounded-lg text-sm font-medium";
                                                         if (selected) className += " bg-pink-500 text-white shadow-md";
-                                                        else if (!available || esPasado || esCerrado) className += " text-gray-300 cursor-not-allowed bg-gray-50 line-through";
+                                                        else if (fechaDeshabilitada) className += " text-gray-300 cursor-not-allowed bg-gray-50 line-through";
+                                                        else if (adminPuedeForzarFecha && esCerrado) className += " text-amber-700 hover:bg-amber-50 cursor-pointer border border-amber-200";
                                                         else className += " text-gray-700 hover:bg-pink-50 cursor-pointer";
                                                         
                                                         return (
-                                                            <button key={idx} onClick={() => handleDateSelect(date)} disabled={!available || esPasado || esCerrado} className={className} title={esCerrado ? "Día cerrado" : esPasado ? "Fecha pasada" : ""}>
+                                                            <button key={idx} onClick={() => handleDateSelect(date)} disabled={fechaDeshabilitada} className={className} title={esCerrado ? "Dia cerrado, disponible para admin" : esPasado ? "Fecha pasada" : ""}>
                                                                 {date.getDate()}
                                                             </button>
                                                         );
@@ -3176,8 +3868,13 @@ Cualquier cambio, podés cancelarlo desde la app con hasta 1 hora de anticipaci�
                                 {nuevaReservaData.fecha && (
                                     <div>
                                         <label className="block text-sm font-medium text-gray-700 mb-2">Hora de inicio *</label>
+                                        {modoHorarioManualCompleto && horariosDisponibles.length > 0 && (
+                                            <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                                                Modo admin: este dia no tiene horario normal para el profesional. Puedes elegir cualquier hora libre del dia, siempre que no choque con otra cita.
+                                            </div>
+                                        )}
                                         {horariosDisponibles.length > 0 ? (
-                                            <div className="grid grid-cols-3 gap-2">
+                                            <div className={`${modoHorarioManualCompleto ? 'max-h-64 overflow-y-auto pr-1' : ''} grid grid-cols-3 gap-2`}>
                                                 {horariosDisponibles.map(hora => (
                                                     <button key={hora} type="button" onClick={() => setNuevaReservaData({...nuevaReservaData, hora_inicio: hora})} className={`py-2 px-3 rounded-lg text-sm font-medium ${nuevaReservaData.hora_inicio === hora ? 'bg-pink-500 text-white' : 'bg-gray-100 hover:bg-gray-200'}`}>
                                                         {formatTo12Hour(hora)}
@@ -3220,71 +3917,93 @@ Cualquier cambio, podés cancelarlo desde la app con hasta 1 hora de anticipaci�
                     </div>
                 )}
 
-                {agendaDetalleBooking && (
-                    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-                        <div className="bg-white rounded-xl max-w-lg w-full p-5 shadow-xl">
-                            <div className="flex items-start justify-between gap-4 border-b pb-3">
-                                <div>
-                                    <p className="text-xs uppercase tracking-wide text-pink-500 font-bold">Detalle de cita</p>
-                                    <h3 className="text-xl font-bold text-gray-900">{agendaDetalleBooking.cliente_nombre || 'Cliente sin nombre'}</h3>
-                                </div>
-                                <button onClick={() => setAgendaDetalleBooking(null)} className="text-gray-500 hover:text-gray-700 text-2xl leading-none">×</button>
+                {agendaDetalleBooking && (() => {
+                    const resumen = getAgendaResumenCobro(agendaDetalleBooking);
+                    const serviciosDetalle = getAgendaServicios(agendaDetalleBooking);
+                    const horaFinDetalle = agendaDetalleBooking.hora_fin || calculateEndTime(agendaDetalleBooking.hora_inicio, agendaDetalleBooking.duracion || 60);
+                    const duracionDetalle = Math.max(0, timeToMinutes(horaFinDetalle) - timeToMinutes(agendaDetalleBooking.hora_inicio));
+                    const estadoClase = agendaDetalleBooking.estado === 'Pendiente'
+                        ? 'bg-amber-50 text-amber-700 border-amber-200'
+                        : agendaDetalleBooking.estado === 'Completado'
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                            : agendaDetalleBooking.estado === 'Ausente'
+                                ? 'bg-slate-100 text-slate-700 border-slate-200'
+                                : agendaDetalleBooking.estado === 'Cancelado'
+                                    ? 'bg-red-50 text-red-700 border-red-200'
+                                    : 'bg-cyan-50 text-cyan-700 border-cyan-200';
+
+                    return (
+                    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 sm:p-4">
+                        <div className="bg-white w-full sm:max-w-xl max-h-[96vh] overflow-y-auto rounded-t-3xl sm:rounded-2xl shadow-2xl">
+                            <div className="sticky top-0 z-10 bg-white/95 backdrop-blur border-b px-5 py-4 flex items-center justify-between">
+                                <button onClick={() => setAgendaDetalleBooking(null)} className="w-10 h-10 rounded-full hover:bg-gray-100 text-2xl leading-none">x</button>
+                                <h3 className="text-xl font-bold text-gray-900">Cita</h3>
+                                {puedeEditarReserva(agendaDetalleBooking) ? (
+                                    <button onClick={() => abrirModalReprogramar(agendaDetalleBooking)} className="w-16 h-10 rounded-full hover:bg-gray-100 text-sm font-bold">Editar</button>
+                                ) : <span className="w-10"></span>}
                             </div>
 
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 py-4 text-sm">
-                                <div className="rounded-lg bg-gray-50 p-3">
-                                    <p className="text-xs font-bold uppercase text-gray-400">Fecha</p>
-                                    <p className="font-semibold text-gray-900">{agendaDetalleBooking.fecha}</p>
-                                </div>
-                                <div className="rounded-lg bg-gray-50 p-3">
-                                    <p className="text-xs font-bold uppercase text-gray-400">Hora</p>
-                                    <p className="font-semibold text-gray-900">
-                                        {formatTo12Hour(agendaDetalleBooking.hora_inicio)} - {formatTo12Hour(agendaDetalleBooking.hora_fin || calculateEndTime(agendaDetalleBooking.hora_inicio, agendaDetalleBooking.duracion || 60))}
-                                    </p>
-                                </div>
-                                <div className="rounded-lg bg-gray-50 p-3">
-                                    <p className="text-xs font-bold uppercase text-gray-400">Servicio</p>
-                                    <p className="font-semibold text-gray-900">{agendaDetalleBooking.servicio}</p>
-                                </div>
-                                <div className="rounded-lg bg-gray-50 p-3">
-                                    <p className="text-xs font-bold uppercase text-gray-400">Profesional</p>
-                                    <p className="font-semibold text-gray-900">{agendaDetalleBooking.profesional_nombre || agendaDetalleBooking.trabajador_nombre || 'Sin profesional'}</p>
-                                </div>
-                                <div className="rounded-lg bg-gray-50 p-3">
-                                    <p className="text-xs font-bold uppercase text-gray-400">Estado</p>
-                                    <p className="font-semibold text-gray-900">{agendaDetalleBooking.estado || 'Sin estado'}</p>
-                                </div>
-                                <div className="rounded-lg bg-gray-50 p-3">
-                                    <p className="text-xs font-bold uppercase text-gray-400">WhatsApp</p>
-                                    <p className="font-semibold text-gray-900">+{agendaDetalleBooking.cliente_whatsapp || 'Sin numero'}</p>
-                                </div>
-                            </div>
-
-                            {agendaDetalleBooking._grupoVisual && Array.isArray(agendaDetalleBooking._reservasGrupo) && (
-                                <div className="mb-4 rounded-lg border border-pink-100 bg-pink-50 p-3">
-                                    <p className="text-xs font-bold uppercase text-pink-500 mb-2">Servicios del turno</p>
-                                    <div className="space-y-2">
-                                        {agendaDetalleBooking._reservasGrupo.map(item => (
-                                            <div key={item.id} className="flex justify-between gap-3 text-sm">
-                                                <span className="font-semibold text-gray-800">{item.servicio}</span>
-                                                <span className="text-gray-500">{formatTo12Hour(item.hora_inicio)} - {formatTo12Hour(item.hora_fin)}</span>
-                                            </div>
-                                        ))}
+                            <div className="px-5 py-5">
+                                <div className="mb-5">
+                                    <h2 className="text-2xl font-extrabold leading-tight text-gray-950">{agendaDetalleBooking.servicio || 'Servicio'}</h2>
+                                    <p className="mt-2 text-xl font-bold text-gray-900">Total: {formatMoneyEstadistica(resumen.totalMostrar)}</p>
+                                    <div className="mt-3 flex flex-wrap gap-2">
+                                        <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-bold ${estadoClase}`}>{agendaDetalleBooking.estado || 'Sin estado'}</span>
+                                        <span className="inline-flex rounded-full border border-green-200 bg-green-50 px-3 py-1 text-xs font-bold text-green-700">{getAgendaEstadoPago(agendaDetalleBooking)}</span>
                                     </div>
                                 </div>
-                            )}
 
-                            <div className="flex gap-3">
-                                <button onClick={() => setAgendaDetalleBooking(null)} className="flex-1 px-4 py-2 border rounded-lg">Cerrar</button>
-                                {puedeEditarReserva(agendaDetalleBooking) && (
-                                    <button onClick={() => abrirModalReprogramar(agendaDetalleBooking)} className="flex-1 px-4 py-2 bg-pink-500 text-white rounded-lg font-bold hover:bg-pink-600">
-                                        Editar
-                                    </button>
+                                <div className="mb-5 space-y-1 text-gray-700">
+                                    <p className="font-semibold">{window.formatFechaCompleta ? window.formatFechaCompleta(agendaDetalleBooking.fecha) : agendaDetalleBooking.fecha}</p>
+                                    <p>de {formatTo12Hour(agendaDetalleBooking.hora_inicio)} a {formatTo12Hour(horaFinDetalle)} ({duracionDetalle} min)</p>
+                                    <p className="font-semibold">{agendaDetalleBooking.profesional_nombre || agendaDetalleBooking.trabajador_nombre || 'Sin profesional'}</p>
+                                    {config?.direccion && <p className="text-sm text-gray-500">{config.direccion}</p>}
+                                </div>
+
+                                <div className="divide-y rounded-xl border bg-white">
+                                    <div className="flex items-center justify-between p-4"><span className="font-semibold text-gray-800">Cliente</span><span className="text-right text-gray-600">{agendaDetalleBooking.cliente_nombre || 'Sin nombre'} &gt;</span></div>
+                                    <div className="flex items-center justify-between p-4"><span className="font-semibold text-gray-800">WhatsApp</span><button onClick={() => window.enviarWhatsApp?.(agendaDetalleBooking.cliente_whatsapp, `Hola ${agendaDetalleBooking.cliente_nombre || ''}`)} className="text-right text-pink-600 font-semibold">+{agendaDetalleBooking.cliente_whatsapp || 'Sin numero'} &gt;</button></div>
+                                    <div className="flex items-center justify-between p-4"><span className="font-semibold text-gray-800">Precio del servicio</span><span className="font-bold text-gray-900">{formatMoneyEstadistica(resumen.costoServicios)}</span></div>
+                                    <div className="flex items-center justify-between p-4"><span className="font-semibold text-gray-800">Anticipo requerido</span><span className={`font-bold ${resumen.requiereAnticipo ? 'text-amber-700' : 'text-gray-500'}`}>{resumen.requiereAnticipo ? 'Si' : 'No'}</span></div>
+                                    {resumen.requiereAnticipo && <div className="flex items-center justify-between p-4"><div><p className="font-semibold text-gray-800">Monto del anticipo</p><p className="text-sm text-gray-500">{resumen.tipoAnticipo === 'porcentaje' ? `${resumen.valorAnticipo}% del servicio` : 'Monto fijo'}</p></div><span className="font-bold text-amber-700">{formatMoneyEstadistica(resumen.anticipo)}</span></div>}
+                                    <div className="flex items-center justify-between p-4"><span className="font-semibold text-gray-800">Coste de servicios</span><span className="text-gray-600">{formatMoneyEstadistica(resumen.costoServicios)}</span></div>
+                                    <div className="flex items-center justify-between p-4"><span className="font-semibold text-gray-800">Descuento</span><span className="text-gray-600">No</span></div>
+                                    <div className="flex items-center justify-between p-4"><span className="font-semibold text-gray-800">Coste total</span><span className="text-gray-600">{formatMoneyEstadistica(resumen.totalMostrar)}</span></div>
+                                    <div className="flex items-center justify-between p-4"><div><p className="font-semibold text-gray-800">Deposito</p><p className="text-sm text-gray-500">{resumen.requiereAnticipo ? (agendaDetalleBooking.estado === 'Pendiente' ? 'Pendiente de recibir' : 'Aplica para esta cita') : 'No aplica'}</p></div><span className="text-gray-600">{formatMoneyEstadistica(resumen.anticipo)}</span></div>
+                                    <div className="flex items-center justify-between p-4"><span className="font-semibold text-gray-800">Total pendiente</span><span className="font-bold text-gray-900">{formatMoneyEstadistica(resumen.pendiente)}</span></div>
+                                    <div className="flex items-center justify-between p-4"><span className="font-semibold text-gray-800">Cobro real</span><span className="font-bold text-emerald-700">{resumen.cobroReal > 0 ? formatMoneyEstadistica(resumen.cobroReal) : 'Sin registrar'}</span></div>
+                                </div>
+
+                                {serviciosDetalle.length > 1 && (
+                                    <div className="mt-5 rounded-xl border border-pink-100 bg-pink-50 p-4">
+                                        <p className="text-xs font-bold uppercase text-pink-500 mb-3">Servicios del turno</p>
+                                        <div className="space-y-2">
+                                            {serviciosDetalle.map(item => (
+                                                <div key={item.id} className="flex justify-between gap-3 text-sm">
+                                                    <span className="font-semibold text-gray-800">{item.servicio}</span>
+                                                    <span className="text-gray-500">{formatTo12Hour(item.hora_inicio)} - {formatTo12Hour(item.hora_fin || calculateEndTime(item.hora_inicio, item.duracion || 60))}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
                                 )}
+
+                                <div className="mt-5 rounded-xl border bg-gray-50 p-4">
+                                    <p className="font-bold text-gray-900 mb-3">Acciones</p>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        {agendaDetalleBooking.estado === 'Pendiente' && puedeGestionarReservas && <button onClick={() => confirmarPago(agendaDetalleBooking.id, agendaDetalleBooking)} className="px-3 py-2 rounded-lg bg-green-600 text-white font-bold text-sm">Confirmar pago</button>}
+                                        {puedeEditarReserva(agendaDetalleBooking) && <button onClick={() => abrirModalReprogramar(agendaDetalleBooking)} className="px-3 py-2 rounded-lg bg-pink-500 text-white font-bold text-sm">Editar</button>}
+                                        {turnoYaPaso(agendaDetalleBooking) && agendaDetalleBooking.estado !== 'Ausente' && puedeGestionarReservas && <button onClick={() => marcarAusencia(agendaDetalleBooking)} className="px-3 py-2 rounded-lg bg-slate-700 text-white font-bold text-sm">Ausencia</button>}
+                                        {agendaDetalleBooking.estado === 'Completado' && puedeGestionarReservas && <button onClick={() => abrirModalCobro(agendaDetalleBooking)} className="px-3 py-2 rounded-lg bg-emerald-600 text-white font-bold text-sm">Cobro real</button>}
+                                        {puedeEditarReserva(agendaDetalleBooking) && <button onClick={() => handleCancel(agendaDetalleBooking.id, agendaDetalleBooking)} className="px-3 py-2 rounded-lg bg-red-500 text-white font-bold text-sm">Cancelar</button>}
+                                        {puedeGestionarAvanzado && ['Cancelado', 'Completado', 'Ausente'].includes(agendaDetalleBooking.estado) && <button onClick={() => eliminarReservaHistorial(agendaDetalleBooking)} className="px-3 py-2 rounded-lg bg-gray-900 text-white font-bold text-sm">Eliminar</button>}
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
-                )}
+                    );
+                })()}
 
                 {/* MODAL CALENDARIO DE DISPONIBILIDAD */}
                 {showDisponibilidadModal && (
@@ -3462,6 +4181,10 @@ Cualquier cambio, podés cancelarlo desde la app con hasta 1 hora de anticipaci�
                 </div>
 
                 {/* CONTENIDO */}
+                {tabActivo === 'estadisticas' && (
+                    renderEstadisticas()
+                )}
+
                 {tabActivo === 'configuracion' && (
                     <ConfigPanel profesionalId={userRole === 'profesional' ? profesional?.id : null} modoRestringido={userRole === 'profesional' && userNivel === 2} />
                 )}
@@ -3479,9 +4202,17 @@ Cualquier cambio, podés cancelarlo desde la app con hasta 1 hora de anticipaci�
                         <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-5">
                             <h2 className="text-xl font-bold">Clientes Registrados ({clientesRegistrados.length})</h2>
                             <p className="text-sm text-gray-500">Score calculado con el historial de reservas, completadas y canceladas.</p>
-                            <button onClick={() => { setShowClientesRegistrados(!showClientesRegistrados); if (!showClientesRegistrados) { loadClientesRegistrados(); loadClientesBloqueados(); } }} className="px-4 py-2 rounded-lg bg-pink-50 text-pink-600 text-sm font-medium hover:bg-pink-100">
-                                {showClientesRegistrados ? '🙈 Ocultar' : '👁️ Mostrar'}
-                            </button>
+                            <div className="flex flex-wrap gap-2">
+                                {(userRole === 'admin' || userNivel >= 3) && (
+                                    <label className={`px-4 py-2 rounded-lg bg-gray-900 text-white text-sm font-bold hover:bg-black cursor-pointer ${importandoClientesCsv ? 'opacity-60 pointer-events-none' : ''}`}>
+                                        {importandoClientesCsv ? 'Importando...' : 'Cargar CSV'}
+                                        <input type="file" accept=".csv,text/csv" onChange={handleImportarClientesCsv} className="hidden" disabled={importandoClientesCsv} />
+                                    </label>
+                                )}
+                                <button onClick={() => { setShowClientesRegistrados(!showClientesRegistrados); if (!showClientesRegistrados) { loadClientesRegistrados(); loadClientesBloqueados(); } }} className="px-4 py-2 rounded-lg bg-pink-50 text-pink-600 text-sm font-medium hover:bg-pink-100">
+                                    {showClientesRegistrados ? 'Ocultar' : 'Mostrar'}
+                                </button>
+                            </div>
                         </div>
                         {showClientesRegistrados && (
                             <div className="space-y-5 max-h-[42rem] overflow-y-auto pr-1">
@@ -3490,7 +4221,22 @@ Cualquier cambio, podés cancelarlo desde la app con hasta 1 hora de anticipaci�
                                         <h3 className="font-bold text-red-700 mb-3">Lista negra</h3>
                                         <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
                                             <input type="text" value={nuevoBloqueo.nombre} onChange={(e) => setNuevoBloqueo({...nuevoBloqueo, nombre: e.target.value})} className="border rounded-lg px-3 py-2 text-sm" placeholder="Nombre opcional" />
-                                            <input type="tel" value={nuevoBloqueo.whatsapp} onChange={(e) => setNuevoBloqueo({...nuevoBloqueo, whatsapp: e.target.value.replace(/\D/g, '')})} className="border rounded-lg px-3 py-2 text-sm" placeholder="WhatsApp" />
+                                            <div className="flex">
+                                                <select
+                                                    value={nuevoBloqueo.codigo_pais || codigoPaisNegocio}
+                                                    onChange={(e) => setNuevoBloqueo({
+                                                        ...nuevoBloqueo,
+                                                        codigo_pais: e.target.value,
+                                                        whatsapp: normalizarTelefonoLocalSeguro(nuevoBloqueo.whatsapp, e.target.value)
+                                                    })}
+                                                    className="w-28 rounded-l-lg border border-r-0 px-2 py-2 text-sm bg-white"
+                                                >
+                                                    {paisesTelefono.map((pais) => (
+                                                        <option key={pais.id} value={pais.codigo}>{pais.bandera} +{pais.codigo}</option>
+                                                    ))}
+                                                </select>
+                                                <input type="tel" value={nuevoBloqueo.whatsapp} onChange={(e) => setNuevoBloqueo({...nuevoBloqueo, whatsapp: normalizarTelefonoLocalSeguro(e.target.value, nuevoBloqueo.codigo_pais || codigoPaisNegocio)})} className="border rounded-r-lg px-3 py-2 text-sm" placeholder="WhatsApp" />
+                                            </div>
                                             <input type="text" value={nuevoBloqueo.motivo} onChange={(e) => setNuevoBloqueo({...nuevoBloqueo, motivo: e.target.value})} className="border rounded-lg px-3 py-2 text-sm" placeholder="Motivo opcional" />
                                             <button onClick={() => handleBloquearCliente()} className="px-4 py-2 rounded-lg bg-red-600 text-white text-sm font-bold hover:bg-red-700">Bloquear</button>
                                         </div>
@@ -3666,12 +4412,12 @@ Cualquier cambio, podés cancelarlo desde la app con hasta 1 hora de anticipaci�
                                         )}
 
                                         {agendaDayLayoutBookings.map(booking => {
-                                            const statusClass = agendaStatusStyle[booking.estado] || 'bg-gray-500 border-gray-600 text-white';
+                                            const statusClass = agendaStatusStyle[booking.estado] || 'bg-gray-50 border-l-gray-500 border-gray-100 text-gray-900';
                                             const isShort = getBookingHeight(booking) < 76;
                                             return (
                                                 <div
                                                     key={booking._grupoVisualId || booking.id}
-                                                    className={`absolute rounded-lg border shadow-sm ${isShort ? 'p-2' : 'p-3'} overflow-hidden cursor-pointer ${statusClass}`}
+                                                    className={`absolute rounded-xl border border-l-4 shadow-sm hover:shadow-md transition ${isShort ? 'p-2' : 'p-3'} overflow-hidden cursor-pointer ${statusClass}`}
                                                     style={getAgendaBookingStyle(booking)}
                                                     onClick={() => abrirDetalleAgenda(booking)}
                                                 >
@@ -3679,10 +4425,10 @@ Cualquier cambio, podés cancelarlo desde la app con hasta 1 hora de anticipaci�
                                                         <div className="min-w-0">
                                                             <p className="text-[11px] font-bold leading-tight opacity-90">{formatTo12Hour(booking.hora_inicio)} - {formatTo12Hour(booking.hora_fin || calculateEndTime(booking.hora_inicio, booking.duracion || 60))}</p>
                                                             {!isShort && <p className="text-sm font-bold truncate">{booking.cliente_nombre}</p>}
-                                                            {!isShort && <p className="text-xs truncate opacity-90">{booking._grupoVisual ? `${booking._reservasGrupo.length} servicios · ${booking.servicio}` : booking.servicio}</p>}
+                                                            {!isShort && <p className="text-xs truncate opacity-90">{booking._grupoVisual ? `${booking._reservasGrupo.length} servicios - ${booking.servicio}` : booking.servicio}</p>}
                                                             {!isShort && <p className="text-[11px] truncate opacity-80">{booking.profesional_nombre || booking.trabajador_nombre || 'Sin profesional'}</p>}
                                                         </div>
-                                                        <button onClick={(event) => { event.stopPropagation(); abrirDetalleAgenda(booking); }} className="mt-auto w-full rounded-md py-1 text-[11px] bg-white/20 hover:bg-white/30 font-bold">
+                                                        <button onClick={(event) => { event.stopPropagation(); abrirDetalleAgenda(booking); }} className="mt-auto w-full rounded-md py-1 text-[11px] bg-white/80 hover:bg-white text-gray-700 font-bold">
                                                             Detalles
                                                         </button>
                                                     </div>
@@ -3740,12 +4486,12 @@ Cualquier cambio, podés cancelarlo desde la app con hasta 1 hora de anticipaci�
                                                 ))}
 
                                                 {dayLayoutBookings.map(booking => {
-                                                    const statusClass = agendaStatusStyle[booking.estado] || 'bg-gray-500 border-gray-600 text-white';
+                                                    const statusClass = agendaStatusStyle[booking.estado] || 'bg-gray-50 border-l-gray-500 border-gray-100 text-gray-900';
                                                     const isShort = getBookingHeight(booking) < 76;
                                                     return (
                                                         <div
                                                             key={booking._grupoVisualId || booking.id}
-                                                            className={`absolute rounded-lg border shadow-sm p-2 overflow-hidden cursor-pointer ${statusClass}`}
+                                                            className={`absolute rounded-xl border border-l-4 shadow-sm hover:shadow-md transition p-2 overflow-hidden cursor-pointer ${statusClass}`}
                                                             style={getAgendaBookingStyle(booking)}
                                                             title={`${booking.cliente_nombre} - ${booking._grupoVisual ? `${booking._reservasGrupo.length} servicios: ` : ''}${booking.servicio}`}
                                                             onClick={() => abrirDetalleAgenda(booking)}
@@ -3754,10 +4500,10 @@ Cualquier cambio, podés cancelarlo desde la app con hasta 1 hora de anticipaci�
                                                                 <div className="min-w-0">
                                                                     <p className="text-xs font-bold leading-tight">{formatTo12Hour(booking.hora_inicio)} - {formatTo12Hour(booking.hora_fin || calculateEndTime(booking.hora_inicio, booking.duracion || 60))}</p>
                                                                     {!isShort && <p className="font-bold text-sm truncate">{booking.cliente_nombre}</p>}
-                                                                    {!isShort && <p className="text-xs truncate opacity-90">{booking._grupoVisual ? `${booking._reservasGrupo.length} servicios · ${booking.servicio}` : booking.servicio}</p>}
+                                                                    {!isShort && <p className="text-xs truncate opacity-90">{booking._grupoVisual ? `${booking._reservasGrupo.length} servicios - ${booking.servicio}` : booking.servicio}</p>}
                                                                     {!isShort && <p className="text-xs truncate opacity-80">{booking.profesional_nombre || booking.trabajador_nombre || 'Sin profesional'}</p>}
                                                                 </div>
-                                                                <button onClick={(event) => { event.stopPropagation(); abrirDetalleAgenda(booking); }} className="mt-auto w-full bg-white/20 hover:bg-white/30 rounded px-2 py-1 text-[11px] font-bold">
+                                                                <button onClick={(event) => { event.stopPropagation(); abrirDetalleAgenda(booking); }} className="mt-auto w-full bg-white/80 hover:bg-white text-gray-700 rounded px-2 py-1 text-[11px] font-bold">
                                                                     Detalles
                                                                 </button>
                                                             </div>
@@ -3888,7 +4634,7 @@ Cualquier cambio, podés cancelarlo desde la app con hasta 1 hora de anticipaci�
                                                         <p className="text-xs font-bold text-pink-700">Cita agrupada: {b._reservasGrupo.length} servicios consecutivos</p>
                                                         {b._reservasGrupo.map(item => (
                                                             <p key={item.id} className="text-xs text-gray-700">
-                                                                {formatTo12Hour(item.hora_inicio)} - {formatTo12Hour(item.hora_fin || calculateEndTime(item.hora_inicio, item.duracion || 60))} · {item.servicio} · {item.profesional_nombre || item.trabajador_nombre || 'Sin profesional'}
+                                                                {formatTo12Hour(item.hora_inicio)} - {formatTo12Hour(item.hora_fin || calculateEndTime(item.hora_inicio, item.duracion || 60))} - {item.servicio} - {item.profesional_nombre || item.trabajador_nombre || 'Sin profesional'}
                                                             </p>
                                                         ))}
                                                     </div>

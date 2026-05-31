@@ -12,6 +12,10 @@ const CATEGORIAS_SERVICIO = [
     { id: 'inactivos', label: 'Inactivos', icono: '⏸️' },
 ];
 
+function formatearListaHorasAdmin(horas = []) {
+    return horas.map(hora => window.formatTo12Hour ? window.formatTo12Hour(hora) : hora).join(', ');
+}
+
 function normalizarTextoServicio(texto) {
     return String(texto || '')
         .toLowerCase()
@@ -266,7 +270,7 @@ function ServiciosPanel() {
                                         )}
                                         {servicio.horarios_permitidos?.length > 0 && (
                                             <p className="text-xs text-pink-600 mt-3">
-                                                🕐 Horarios permitidos: {servicio.horarios_permitidos.join(', ')}
+                                                🕐 Horarios permitidos: {formatearListaHorasAdmin(servicio.horarios_permitidos)}
                                             </p>
                                         )}
                                     </div>
@@ -315,8 +319,8 @@ function ServicioForm({ servicio, onGuardar, onCancelar }) {
         }
 
         const duracionNum = parseInt(form.duracion, 10);
-        if (isNaN(duracionNum) || duracionNum < 15) {
-            alert('La duración debe ser al menos 15 minutos');
+        if (isNaN(duracionNum) || duracionNum < 3) {
+            alert('La duración debe ser al menos 3 minutos');
             return;
         }
 

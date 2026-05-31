@@ -1,6 +1,6 @@
 // sw.js - Service Worker para Knela nails art
 
-const CACHE_NAME = 'knelanailsart-v29';
+const CACHE_NAME = 'knelanailsart-v47';
 const urlsToCache = [
   '/knelanailsart/',
   '/knelanailsart/index.html',
@@ -17,7 +17,14 @@ const urlsToCache = [
   '/knelanailsart/icons/icon-152x152.png',
   '/knelanailsart/icons/icon-192x192.png',
   '/knelanailsart/icons/icon-384x384.png',
-  '/knelanailsart/icons/icon-512x512.png'
+  '/knelanailsart/icons/icon-512x512.png',
+  '/knelanailsart/vendor/react.production.min.js',
+  '/knelanailsart/vendor/react-dom.production.min.js',
+  '/knelanailsart/vendor/babel.min.js',
+  '/knelanailsart/vendor/bcrypt.min.js',
+  '/knelanailsart/vendor/tailwind-browser.js',
+  '/knelanailsart/vendor/lucide/lucide.css',
+  '/knelanailsart/vendor/lucide/lucide.woff2'
 ];
 
 // ============================================
