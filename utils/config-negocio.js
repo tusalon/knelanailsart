@@ -27,6 +27,44 @@ let configCache = null;
 let ultimaActualizacion = 0;
 const CACHE_DURATION = 2 * 60 * 1000; // 2 minutos
 
+function normalizarHexColor(hex, fallback = '#ec4899') {
+    const limpio = String(hex || '').replace('#', '').trim();
+    if (!/^[0-9a-fA-F]{6}$/.test(limpio)) return fallback;
+    return `#${limpio}`;
+}
+
+function getRgbFromHex(hex, fallback = { r: 236, g: 72, b: 153 }) {
+    const limpio = String(hex || '').replace('#', '').trim();
+    if (!/^[0-9a-fA-F]{6}$/.test(limpio)) return fallback;
+    return {
+        r: parseInt(limpio.slice(0, 2), 16),
+        g: parseInt(limpio.slice(2, 4), 16),
+        b: parseInt(limpio.slice(4, 6), 16)
+    };
+}
+
+function getLuminancia(rgb) {
+    const canales = [rgb.r, rgb.g, rgb.b].map(valor => {
+        const normal = valor / 255;
+        return normal <= 0.03928
+            ? normal / 12.92
+            : Math.pow((normal + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * canales[0] + 0.7152 * canales[1] + 0.0722 * canales[2];
+}
+
+function oscurecerHex(hex, factor = 0.62) {
+    const rgb = getRgbFromHex(hex);
+    const toHex = valor => Math.max(0, Math.min(255, Math.round(valor))).toString(16).padStart(2, '0');
+    return `#${toHex(rgb.r * factor)}${toHex(rgb.g * factor)}${toHex(rgb.b * factor)}`;
+}
+
+function asegurarColorVisible(hex, fallback = '#ec4899') {
+    const normalizado = normalizarHexColor(hex, fallback);
+    const rgb = getRgbFromHex(normalizado);
+    return getLuminancia(rgb) > 0.72 ? oscurecerHex(normalizado) : normalizado;
+}
+
 function hexToRgbParts(hex, fallback = '236 72 153') {
     const limpio = String(hex || '').replace('#', '').trim();
     if (!/^[0-9a-fA-F]{6}$/.test(limpio)) return fallback;
@@ -37,19 +75,24 @@ function hexToRgbParts(hex, fallback = '236 72 153') {
 }
 
 function aplicarTemaNegocio(config = {}) {
-    const primario = config.color_primario || '#ec4899';
-    const secundario = config.color_secundario || '#f9a8d4';
+    const primarioOriginal = normalizarHexColor(config.color_primario || '#ec4899');
+    const secundarioOriginal = normalizarHexColor(config.color_secundario || '#f9a8d4', '#f9a8d4');
+    const primario = asegurarColorVisible(primarioOriginal, '#ec4899');
+    const secundario = asegurarColorVisible(secundarioOriginal, '#f9a8d4');
     const primarioRgb = hexToRgbParts(primario);
     const secundarioRgb = hexToRgbParts(secundario, '249 168 212');
+    const secundarioCss = secundarioRgb.split(' ').join(', ');
     const root = document.documentElement;
 
     root.style.setProperty('--brand-primary', primario);
     root.style.setProperty('--brand-secondary', secundario);
+    root.style.setProperty('--brand-primary-original', primarioOriginal);
+    root.style.setProperty('--brand-secondary-original', secundarioOriginal);
     root.style.setProperty('--brand-primary-rgb', primarioRgb);
     root.style.setProperty('--brand-secondary-rgb', secundarioRgb);
-    root.style.setProperty('--brand-soft', `rgba(${secundarioRgb.replaceAll(' ', ', ')}, 0.20)`);
-    root.style.setProperty('--brand-surface', `rgba(${secundarioRgb.replaceAll(' ', ', ')}, 0.12)`);
-    root.style.setProperty('--brand-surface-strong', `rgba(${secundarioRgb.replaceAll(' ', ', ')}, 0.28)`);
+    root.style.setProperty('--brand-soft', `rgba(${secundarioCss}, 0.20)`);
+    root.style.setProperty('--brand-surface', `rgba(${secundarioCss}, 0.12)`);
+    root.style.setProperty('--brand-surface-strong', `rgba(${secundarioCss}, 0.28)`);
 
     const themeMeta = document.querySelector('meta[name="theme-color"]');
     if (themeMeta) themeMeta.setAttribute('content', primario);
